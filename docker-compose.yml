@@ -1,4 +1,24 @@
 services:
+  db:
+    image: postgres:15-alpine
+    container_name: student-registry-db
+    environment:
+      - POSTGRES_DB=${DB_NAME:-student_registry}
+      - POSTGRES_USER=${DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${DB_PORT:-5433}:5432"
+    networks:
+      - student-registry-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: ./backend
@@ -13,9 +33,17 @@ services:
       - AUTHENTIK_URL=${AUTHENTIK_URL:-}
       - AUTHENTIK_ISSUER=${AUTHENTIK_ISSUER:-}
       - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID:-}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-student_registry}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgres}
     volumes:
       - ./backend:/app
       - /app/node_modules
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
       - student-registry-network
     restart: unless-stopped
@@ -45,3 +73,6 @@ services:
 networks:
   student-registry-network:
     driver: bridge
+
+volumes:
+  postgres_data:

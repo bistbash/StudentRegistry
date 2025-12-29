@@ -38,7 +38,7 @@ function App() {
       }
     } catch (error) {
       console.error('Error processing callback:', error)
-      setError('Authentication failed. Please try again.')
+      setError('ההתחברות נכשלה. נסה שוב.')
     } finally {
       setProcessingCallback(false)
     }
@@ -73,27 +73,29 @@ function App() {
           headers['Authorization'] = `Bearer ${token}`
         } else {
           console.warn('Auth enabled and user exists but no access token found');
-          setError('Authentication token not available. Please log in again.')
+          setError('אסימון ההתחברות לא זמין. התחבר שוב.')
           return
         }
       } else if (authEnabled && !user) {
-        setError('Please log in to view students')
+        setError('התחבר כדי לראות סטודנטים')
         return
       }
 
       console.log('Fetching students from:', `${API_URL}/api/students`);
+      console.log('Request headers:', headers);
       const response = await fetch(`${API_URL}/api/students`, {
         headers,
       })
 
+      console.log('Response status:', response.status);
       if (response.status === 401) {
         // Not authenticated
         if (authEnabled) {
-          setError('Please log in to view students')
+          setError('התחבר כדי לראות את רשימת הלומדים')
           // Clear user state if token is invalid
           setUser(null)
         } else {
-          throw new Error('Failed to fetch students')
+          throw new Error('נכשל בטעינת רשימת הלומדים')
         }
         return
       }
@@ -101,10 +103,12 @@ function App() {
       if (!response.ok) {
         const errorText = await response.text()
         console.error('Failed to fetch students:', response.status, errorText)
-        throw new Error(`Failed to fetch students: ${response.status}`)
+        throw new Error(`נכשל בטעינת רשימת הלומדים: ${response.status}`)
       }
 
       const data = await response.json()
+      console.log('Received students data:', data)
+      console.log('Number of students:', data.length)
       setStudents(data)
       setError(null)
     } catch (err) {
@@ -120,7 +124,7 @@ function App() {
       await login()
     } catch (error) {
       console.error('Login error:', error)
-      setError('Login failed. Please try again.')
+      setError('ההתחברות נכשלה. נסה שוב.')
     }
   }
 
@@ -137,33 +141,31 @@ function App() {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
-          <p className="text-gray-600">Loading...</p>
+          <p className="text-gray-600">טוען...</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 py-8">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="bg-white shadow rounded-lg">
-          <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">Student Registry</h1>
-              <p className="mt-1 text-sm text-gray-500">List of registered students</p>
-            </div>
+    <div className="min-h-screen bg-gray-50">
+      {/* Navigation Bar */}
+      <nav className="bg-white shadow-md">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center h-16">
+            <h1 className="text-2xl font-bold text-gray-900">רשימת לומדים</h1>
             {authEnabled && (
               <div className="flex items-center gap-4">
                 {user ? (
                   <>
                     <span className="text-sm text-gray-600">
-                      {user.profile?.name || user.profile?.email || 'User'}
+                      {user.profile?.name || user.profile?.email || 'משתמש'}
                     </span>
                     <button
                       onClick={handleLogout}
                       className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
                     >
-                      Logout
+                      התנתקות
                     </button>
                   </>
                 ) : (
@@ -171,71 +173,113 @@ function App() {
                     onClick={handleLogin}
                     className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
                   >
-                    Login
+                    התחברות
                   </button>
                 )}
               </div>
             )}
           </div>
+        </div>
+      </nav>
+
+      {/* Main Content */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="bg-white shadow rounded-lg">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h2 className="text-xl font-semibold text-gray-900">מרשם לומדים</h2>
+            <p className="mt-1 text-sm text-gray-500">רשימת לומדים רשומים</p>
+          </div>
 
           {loading && (
             <div className="px-6 py-8 text-center">
-              <p className="text-gray-500">Loading students...</p>
+              <p className="text-gray-500">טוען רשימת לומדים...</p>
             </div>
           )}
 
           {error && (
-            <div className="px-6 py-4 bg-red-50 border-l-4 border-red-400">
-              <p className="text-red-700">Error: {error}</p>
+            <div className="px-6 py-4 bg-red-50 border-r-4 border-red-400">
+              <p className="text-red-700">שגיאה: {error}</p>
             </div>
           )}
 
           {!loading && !error && (
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
+              <table className="min-w-full">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      ID
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-700 tracking-wider">
+                      ת.ז
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Name
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-700 tracking-wider">
+                      שם משפחה
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Email
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-700 tracking-wider">
+                      שם פרטי
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Age
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-700 tracking-wider">
+                      כיתה
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Course
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-700 tracking-wider">
+                      מקבילה
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-700 tracking-wider">
+                      מין
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-700 tracking-wider">
+                      מגמה
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-700 tracking-wider">
+                      סטטוס
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-700 tracking-wider">
+                      מחזור
                     </th>
                   </tr>
                 </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
+                <tbody className="bg-white">
                   {students.length === 0 ? (
                     <tr>
-                      <td colSpan="5" className="px-6 py-4 text-center text-gray-500">
-                        No students found
+                      <td colSpan="9" className="px-6 py-4 text-center text-gray-500">
+                        לא נמצאו לומדים
                       </td>
                     </tr>
                   ) : (
                     students.map((student) => (
                       <tr key={student.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          {student.id}
+                        <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {student.idNumber}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                          {student.name}
+                        <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                          {student.lastName}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {student.email}
+                        <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                          {student.firstName}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {student.age}
+                        <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-700">
+                          {student.grade}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {student.course}
+                        <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-700 text-center">
+                          {student.stream}
+                        </td>
+                        <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-700">
+                          {student.gender}
+                        </td>
+                        <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-700">
+                          {student.track}
+                        </td>
+                        <td className="px-4 py-4 whitespace-nowrap">
+                          <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                            student.status === 'לומד' 
+                              ? 'bg-green-100 text-green-800' 
+                              : student.status === 'סיים לימודים'
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-gray-100 text-gray-800'
+                          }`}>
+                            {student.status}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-700">
+                          {student.cycle}
                         </td>
                       </tr>
                     ))

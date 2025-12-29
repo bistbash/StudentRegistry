@@ -10,5 +10,6 @@ COPY . .
 
 EXPOSE 3001
 
-CMD ["npm", "start"]
+# Install dependencies if package.json changed (useful for volume mounts)
+CMD ["sh", "-c", "npm install && npm start"]
 

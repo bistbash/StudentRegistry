@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const jwksClient = require('jwks-rsa');
+const { initDatabase, StudentModel } = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -47,7 +48,7 @@ if (USE_AUTH) {
     const token = authHeader && authHeader.split(' ')[1]; // Get token from "Bearer TOKEN"
 
     if (!token) {
-      return res.status(401).json({ error: 'No token provided' });
+      return res.status(401).json({ error: 'לא סופק אסימון' });
     }
 
     // Verify token signature first
@@ -56,21 +57,21 @@ if (USE_AUTH) {
     }, (err, decoded) => {
       if (err) {
         console.error('JWT verification error:', err.message);
-        return res.status(401).json({ error: 'Invalid token', details: err.message });
+        return res.status(401).json({ error: 'אסימון לא תקין', details: err.message });
       }
 
       // Verify issuer (accept with or without trailing slash)
       const tokenIssuer = (decoded.iss || '').replace(/\/$/, '');
       if (tokenIssuer !== issuerBase) {
         console.error('Issuer mismatch. Expected:', issuerBase, 'Got:', decoded.iss);
-        return res.status(401).json({ error: 'Invalid token issuer', details: `Expected ${issuerBase}, got ${decoded.iss}` });
+        return res.status(401).json({ error: 'מנפיק האסימון לא תקין', details: `Expected ${issuerBase}, got ${decoded.iss}` });
       }
 
       // Verify audience
       const audience = Array.isArray(decoded.aud) ? decoded.aud : [decoded.aud];
       if (!audience.includes(AUTHENTIK_CLIENT_ID)) {
         console.error('Audience mismatch. Expected:', AUTHENTIK_CLIENT_ID, 'Got:', decoded.aud);
-        return res.status(401).json({ error: 'Invalid token audience', details: `Expected ${AUTHENTIK_CLIENT_ID}, got ${decoded.aud}` });
+        return res.status(401).json({ error: 'קהל האסימון לא תקין', details: `Expected ${AUTHENTIK_CLIENT_ID}, got ${decoded.aud}` });
       }
 
       req.user = decoded;
@@ -95,12 +96,7 @@ if (USE_AUTH) {
   });
 }
 
-// Sample student data (in a real app, this would come from a database)
-const students = [
-  { id: 1, name: 'John Doe', email: 'john.doe@example.com', age: 20, course: 'Computer Science' },
-  { id: 2, name: 'Jane Smith', email: 'jane.smith@example.com', age: 21, course: 'Mathematics' },
-  { id: 3, name: 'Bob Johnson', email: 'bob.johnson@example.com', age: 19, course: 'Physics' },
-];
+// Database will be initialized on server start
 
 // Routes
 app.get('/api/health', (req, res) => {
@@ -110,19 +106,80 @@ app.get('/api/health', (req, res) => {
 // Student routes - protect with auth if enabled
 const studentRoutes = express.Router();
 
-studentRoutes.get('/', (req, res) => {
-  res.json(students);
+studentRoutes.get('/', async (req, res) => {
+  try {
+    const students = await StudentModel.getAll();
+    res.json(students);
+  } catch (error) {
+    console.error('Error fetching students:', error);
+    res.status(500).json({ error: 'שגיאה בטעינת הלומדים' });
+  }
 });
 
-studentRoutes.get('/:id', (req, res) => {
-  const id = parseInt(req.params.id);
-  const student = students.find(s => s.id === id);
+studentRoutes.get('/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const student = await StudentModel.getById(id);
 
-  if (!student) {
-    return res.status(404).json({ error: 'Student not found' });
+    if (!student) {
+      return res.status(404).json({ error: 'לומד לא נמצא' });
+    }
+
+    res.json(student);
+  } catch (error) {
+    console.error('Error fetching student:', error);
+    res.status(500).json({ error: 'שגיאה בטעינת הלומד' });
   }
+});
 
-  res.json(student);
+studentRoutes.post('/', async (req, res) => {
+  try {
+    const student = await StudentModel.create(req.body);
+    res.status(201).json(student);
+  } catch (error) {
+    console.error('Error creating student:', error);
+    if (error.code === '23505') { // Unique violation
+      res.status(409).json({ error: 'לומד עם מספר תעודת זהות זה כבר קיים' });
+    } else {
+      res.status(500).json({ error: 'שגיאה ביצירת הלומד' });
+    }
+  }
+});
+
+studentRoutes.put('/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const student = await StudentModel.update(id, req.body);
+
+    if (!student) {
+      return res.status(404).json({ error: 'לומד לא נמצא' });
+    }
+
+    res.json(student);
+  } catch (error) {
+    console.error('Error updating student:', error);
+    if (error.code === '23505') { // Unique violation
+      res.status(409).json({ error: 'לומד עם מספר תעודת זהות זה כבר קיים' });
+    } else {
+      res.status(500).json({ error: 'שגיאה בעדכון הלומד' });
+    }
+  }
+});
+
+studentRoutes.delete('/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const result = await StudentModel.delete(id);
+
+    if (!result) {
+      return res.status(404).json({ error: 'לומד לא נמצא' });
+    }
+
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error deleting student:', error);
+    res.status(500).json({ error: 'שגיאה במחיקת הלומד' });
+  }
 });
 
 // Apply auth middleware if enabled
@@ -132,7 +189,22 @@ if (USE_AUTH && verifyToken) {
   app.use('/api/students', studentRoutes);
 }
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Backend server running on port ${PORT}`);
-  console.log(`Authentik authentication: ${USE_AUTH ? 'ENABLED' : 'DISABLED'}`);
-});
+// Initialize database and start server
+async function startServer() {
+  try {
+    // Initialize database (create tables, insert sample data if needed)
+    await initDatabase();
+    
+    // Start server
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Backend server running on port ${PORT}`);
+      console.log(`Authentik authentication: ${USE_AUTH ? 'ENABLED' : 'DISABLED'}`);
+      console.log(`Database: Connected to PostgreSQL`);
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+}
+
+startServer();
