@@ -52,6 +52,30 @@ async function initDatabase(retries = 5, delay = 2000) {
       CREATE INDEX IF NOT EXISTS idx_students_id_number ON students(id_number)
     `);
 
+    // Create student_history table for tracking changes
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS student_history (
+        id SERIAL PRIMARY KEY,
+        student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+        change_type VARCHAR(50) NOT NULL,
+        field_name VARCHAR(100),
+        old_value TEXT,
+        new_value TEXT,
+        location VARCHAR(255),
+        changed_by VARCHAR(255),
+        change_description TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create indexes for faster history queries
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_student_history_student_id ON student_history(student_id)
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_student_history_created_at ON student_history(created_at DESC)
+    `);
+
     // Check if table is empty and insert sample data
     const result = await pool.query('SELECT COUNT(*) FROM students');
     const count = parseInt(result.rows[0].count);
@@ -136,7 +160,7 @@ const StudentModel = {
   },
 
   // Create new student
-  async create(studentData) {
+  async create(studentData, userId = null, location = null) {
     try {
       const result = await pool.query(`
         INSERT INTO students (id_number, last_name, first_name, grade, stream, gender, track, status, cycle)
@@ -163,7 +187,22 @@ const StudentModel = {
         studentData.status,
         studentData.cycle
       ]);
-      return result.rows[0];
+      
+      const student = result.rows[0];
+      
+      // Log creation in history
+      await pool.query(`
+        INSERT INTO student_history (student_id, change_type, change_description, location, changed_by)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [
+        student.id,
+        'created',
+        `נוצר תלמיד חדש: ${studentData.firstName} ${studentData.lastName} (ת.ז: ${studentData.idNumber})`,
+        location,
+        userId
+      ]);
+      
+      return student;
     } catch (error) {
       console.error('Error creating student:', error);
       throw error;
@@ -171,8 +210,14 @@ const StudentModel = {
   },
 
   // Update student
-  async update(id, studentData) {
+  async update(id, studentData, userId = null, location = null) {
     try {
+      // Get old values for comparison
+      const oldStudent = await this.getById(id);
+      if (!oldStudent) {
+        return null;
+      }
+
       const result = await pool.query(`
         UPDATE students
         SET 
@@ -210,7 +255,41 @@ const StudentModel = {
         studentData.cycle,
         id
       ]);
-      return result.rows[0];
+      
+      const updatedStudent = result.rows[0];
+      
+      // Log changes in history
+      const fieldsToTrack = [
+        { db: 'id_number', name: 'תעודת זהות', old: oldStudent.idNumber, new: studentData.idNumber },
+        { db: 'last_name', name: 'שם משפחה', old: oldStudent.lastName, new: studentData.lastName },
+        { db: 'first_name', name: 'שם פרטי', old: oldStudent.firstName, new: studentData.firstName },
+        { db: 'grade', name: 'כיתה', old: oldStudent.grade, new: studentData.grade },
+        { db: 'stream', name: 'מקבילה', old: oldStudent.stream, new: studentData.stream },
+        { db: 'gender', name: 'מין', old: oldStudent.gender, new: studentData.gender },
+        { db: 'track', name: 'מגמה', old: oldStudent.track, new: studentData.track },
+        { db: 'status', name: 'סטטוס', old: oldStudent.status, new: studentData.status },
+        { db: 'cycle', name: 'מחזור', old: oldStudent.cycle, new: studentData.cycle }
+      ];
+      
+      for (const field of fieldsToTrack) {
+        if (field.old !== field.new) {
+          await pool.query(`
+            INSERT INTO student_history (student_id, change_type, field_name, old_value, new_value, location, changed_by, change_description)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          `, [
+            id,
+            'field_update',
+            field.name,
+            field.old,
+            field.new,
+            location,
+            userId,
+            `${field.name} שונה מ-"${field.old}" ל-"${field.new}"`
+          ]);
+        }
+      }
+      
+      return updatedStudent;
     } catch (error) {
       console.error('Error updating student:', error);
       throw error;
@@ -218,12 +297,84 @@ const StudentModel = {
   },
 
   // Delete student
-  async delete(id) {
+  async delete(id, userId = null, location = null) {
     try {
+      const student = await this.getById(id);
+      if (!student) {
+        return null;
+      }
+      
       const result = await pool.query('DELETE FROM students WHERE id = $1 RETURNING id', [id]);
+      
+      if (result.rows[0]) {
+        // Log deletion in history
+        await pool.query(`
+          INSERT INTO student_history (student_id, change_type, change_description, location, changed_by)
+          VALUES ($1, $2, $3, $4, $5)
+        `, [
+          id,
+          'deleted',
+          `תלמיד נמחק: ${student.firstName} ${student.lastName} (ת.ז: ${student.idNumber})`,
+          location,
+          userId
+        ]);
+      }
+      
       return result.rows[0];
     } catch (error) {
       console.error('Error deleting student:', error);
+      throw error;
+    }
+  },
+
+  // Add location change
+  async addLocationChange(studentId, location, userId = null) {
+    try {
+      const student = await this.getById(studentId);
+      if (!student) {
+        return null;
+      }
+      
+      await pool.query(`
+        INSERT INTO student_history (student_id, change_type, location, changed_by, change_description)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [
+        studentId,
+        'location_change',
+        location,
+        userId,
+        `מיקום עודכן ל: ${location}`
+      ]);
+      
+      return { success: true };
+    } catch (error) {
+      console.error('Error adding location change:', error);
+      throw error;
+    }
+  },
+
+  // Get student history
+  async getHistory(studentId) {
+    try {
+      const result = await pool.query(`
+        SELECT 
+          id,
+          student_id as "studentId",
+          change_type as "changeType",
+          field_name as "fieldName",
+          old_value as "oldValue",
+          new_value as "newValue",
+          location,
+          changed_by as "changedBy",
+          change_description as "changeDescription",
+          created_at as "createdAt"
+        FROM student_history
+        WHERE student_id = $1
+        ORDER BY created_at DESC
+      `, [studentId]);
+      return result.rows;
+    } catch (error) {
+      console.error('Error fetching student history:', error);
       throw error;
     }
   }

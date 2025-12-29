@@ -116,6 +116,53 @@ studentRoutes.get('/', async (req, res) => {
   }
 });
 
+// History route - must be before /:id route
+studentRoutes.get('/:id/history', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'מספר תלמיד לא תקין' });
+    }
+    
+    // Check if student exists first
+    const student = await StudentModel.getById(id);
+    if (!student) {
+      return res.status(404).json({ error: 'לומד לא נמצא' });
+    }
+    
+    const history = await StudentModel.getHistory(id);
+    res.json(history || []);
+  } catch (error) {
+    console.error('Error fetching student history:', error);
+    res.status(500).json({ error: 'שגיאה בטעינת ההיסטוריה', details: error.message });
+  }
+});
+
+// Location change route - must be before /:id route
+studentRoutes.post('/:id/location', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { location } = req.body;
+    
+    if (!location) {
+      return res.status(400).json({ error: 'מיקום נדרש' });
+    }
+    
+    const userId = req.user?.email || req.user?.sub || req.user?.name || null;
+    const result = await StudentModel.addLocationChange(id, location, userId);
+    
+    if (!result) {
+      return res.status(404).json({ error: 'לומד לא נמצא' });
+    }
+    
+    res.json({ success: true, message: 'מיקום עודכן בהצלחה' });
+  } catch (error) {
+    console.error('Error updating location:', error);
+    res.status(500).json({ error: 'שגיאה בעדכון המיקום' });
+  }
+});
+
 studentRoutes.get('/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id);
@@ -134,7 +181,9 @@ studentRoutes.get('/:id', async (req, res) => {
 
 studentRoutes.post('/', async (req, res) => {
   try {
-    const student = await StudentModel.create(req.body);
+    const userId = req.user?.email || req.user?.sub || req.user?.name || null;
+    const location = req.body.location || null;
+    const student = await StudentModel.create(req.body, userId, location);
     res.status(201).json(student);
   } catch (error) {
     console.error('Error creating student:', error);
@@ -149,7 +198,23 @@ studentRoutes.post('/', async (req, res) => {
 studentRoutes.put('/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    const student = await StudentModel.update(id, req.body);
+    
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'מספר תלמיד לא תקין' });
+    }
+    
+    const userId = req.user?.email || req.user?.sub || req.user?.name || null;
+    const location = req.body.location || null;
+    
+    // Validate required fields
+    const requiredFields = ['idNumber', 'lastName', 'firstName', 'grade', 'stream', 'gender', 'track', 'status', 'cycle'];
+    const missingFields = requiredFields.filter(field => !req.body[field]);
+    
+    if (missingFields.length > 0) {
+      return res.status(400).json({ error: `שדות חסרים: ${missingFields.join(', ')}` });
+    }
+    
+    const student = await StudentModel.update(id, req.body, userId, location);
 
     if (!student) {
       return res.status(404).json({ error: 'לומד לא נמצא' });
@@ -161,7 +226,7 @@ studentRoutes.put('/:id', async (req, res) => {
     if (error.code === '23505') { // Unique violation
       res.status(409).json({ error: 'לומד עם מספר תעודת זהות זה כבר קיים' });
     } else {
-      res.status(500).json({ error: 'שגיאה בעדכון הלומד' });
+      res.status(500).json({ error: 'שגיאה בעדכון הלומד', details: error.message });
     }
   }
 });
@@ -169,7 +234,9 @@ studentRoutes.put('/:id', async (req, res) => {
 studentRoutes.delete('/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    const result = await StudentModel.delete(id);
+    const userId = req.user?.email || req.user?.sub || req.user?.name || null;
+    const location = req.body.location || null;
+    const result = await StudentModel.delete(id, userId, location);
 
     if (!result) {
       return res.status(404).json({ error: 'לומד לא נמצא' });
