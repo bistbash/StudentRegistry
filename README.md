@@ -16,6 +16,7 @@ StudentRegistry/
 
 - Docker (version 20.10 or higher)
 - Docker Compose (version 2.0 or higher)
+- Authentik instance running on port 9001 (optional, for authentication)
 
 ## Getting Started
 
@@ -33,16 +34,60 @@ This will:
 - Start the frontend development server on port 3000
 - Set up a network for communication between services
 
+### Configuration
+
+**Important**: Create a `.env` file in the project root to configure server settings. The `.env` file is gitignored and will not be committed to the repository.
+
+1. Copy the example environment file:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Edit `.env` and set your server IP and Authentik configuration:
+   ```bash
+   SERVER_IP=192.168.100.12
+   AUTHENTIK_CLIENT_ID=your-client-id-here
+   AUTHENTIK_ISSUER=http://192.168.100.12:9001/application/o/student-registry/
+   VITE_API_URL=http://192.168.100.12:3001
+   VITE_AUTHENTIK_URL=http://192.168.100.12:9001
+   VITE_AUTHENTIK_ISSUER=http://192.168.100.12:9001/application/o/student-registry/
+   VITE_AUTHENTIK_REDIRECT_URI=http://192.168.100.12:3000
+   ```
+
 ### Access the Application
 
-- **Frontend**: http://localhost:3000
-- **Backend API**: http://localhost:3001
+The URLs will depend on your `SERVER_IP` configuration:
+- **Frontend**: http://{SERVER_IP}:3000
+- **Backend API**: http://{SERVER_IP}:3001
+- **Authentik**: http://{SERVER_IP}:9001 (if enabled)
+
+### Authentik Configuration (Optional)
+
+To enable Authentik authentication:
+
+1. Create an OAuth2/OpenID Provider Application in Authentik:
+   - Go to your Authentik admin panel (http://{SERVER_IP}:9001)
+   - Navigate to Applications → Providers → Create
+   - Choose "OpenID Provider" type
+   - Note down the Client ID
+   - Set Redirect URIs to: `http://{SERVER_IP}:3000`
+
+2. Update your `.env` file with the Authentik configuration (see Configuration section above)
+
+3. Restart the services:
+   ```bash
+   docker-compose down
+   docker-compose up --build
+   ```
+
+If Authentik is not configured, the application will run without authentication.
 
 ### API Endpoints
 
 - `GET /api/health` - Health check endpoint
-- `GET /api/students` - Get all students
-- `GET /api/students/:id` - Get a specific student by ID
+- `GET /api/auth/config` - Get authentication configuration
+- `GET /api/students` - Get all students (requires auth if enabled)
+- `GET /api/students/:id` - Get a specific student by ID (requires auth if enabled)
 
 ### Development
 
@@ -76,16 +121,26 @@ docker-compose up --build
 - React 18
 - Vite
 - Tailwind CSS v3
+- oidc-client-ts (for OAuth2/OIDC authentication)
 - Modern ES6+ JavaScript
 
 ### Backend
 - Node.js 18
 - Express.js
+- jsonwebtoken & jwks-rsa (for JWT token verification)
 - CORS enabled for cross-origin requests
+
+## Environment Variables
+
+All sensitive configuration should be set via environment variables in a `.env` file (which is gitignored). See the Configuration section above for details.
+
+The `.env.example` file provides a template with placeholders. Copy it to `.env` and fill in your actual values.
 
 ## Notes
 
 - The backend currently uses in-memory data. In production, you would want to connect to a database.
 - Hot reload is enabled for both frontend and backend during development.
 - Volumes are mounted for live code changes without rebuilding containers.
+- Authentik authentication is optional. If not configured, the app runs without authentication.
+- When Authentik is enabled, student endpoints require a valid JWT token in the Authorization header.
 

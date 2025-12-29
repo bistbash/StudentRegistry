@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   backend:
     build:
@@ -11,6 +9,10 @@ services:
     environment:
       - NODE_ENV=development
       - PORT=3001
+      - SERVER_IP=${SERVER_IP:-localhost}
+      - AUTHENTIK_URL=${AUTHENTIK_URL:-}
+      - AUTHENTIK_ISSUER=${AUTHENTIK_ISSUER:-}
+      - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID:-}
     volumes:
       - ./backend:/app
       - /app/node_modules
@@ -26,7 +28,11 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - VITE_API_URL=http://localhost:3001
+      - VITE_API_URL=${VITE_API_URL:-http://localhost:3001}
+      - VITE_AUTHENTIK_URL=${VITE_AUTHENTIK_URL:-http://192.168.100.12:9001}
+      - VITE_AUTHENTIK_ISSUER=${VITE_AUTHENTIK_ISSUER:-}
+      - VITE_AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID:-}
+      - VITE_AUTHENTIK_REDIRECT_URI=${VITE_AUTHENTIK_REDIRECT_URI:-http://localhost:3000}
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -39,4 +45,3 @@ services:
 networks:
   student-registry-network:
     driver: bridge
-
