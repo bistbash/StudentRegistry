@@ -33,6 +33,18 @@ function App() {
   const [showEditForm, setShowEditForm] = useState(false)
   const [editFormData, setEditFormData] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [showSearch, setShowSearch] = useState(false)
+  const [searchParams, setSearchParams] = useState({
+    idNumber: '',
+    lastName: '',
+    firstName: '',
+    grade: '',
+    stream: '',
+    gender: '',
+    track: '',
+    status: '',
+    cycle: ''
+  })
 
   const processCallback = async () => {
     setProcessingCallback(true)
@@ -67,7 +79,7 @@ function App() {
     }
   }, [user, authLoading, processingCallback])
 
-  const fetchStudents = async () => {
+  const fetchStudents = async (searchQuery = null) => {
     try {
       setLoading(true)
       const headers = {}
@@ -88,9 +100,23 @@ function App() {
         return
       }
 
-      console.log('Fetching students from:', `${API_URL}/api/students`);
+      // Build query string if search parameters provided
+      let url = `${API_URL}/api/students`
+      if (searchQuery) {
+        const params = new URLSearchParams()
+        Object.keys(searchQuery).forEach(key => {
+          if (searchQuery[key] && searchQuery[key].toString().trim() !== '') {
+            params.append(key, searchQuery[key].trim())
+          }
+        })
+        if (params.toString()) {
+          url += '?' + params.toString()
+        }
+      }
+
+      console.log('Fetching students from:', url);
       console.log('Request headers:', headers);
-      const response = await fetch(`${API_URL}/api/students`, {
+      const response = await fetch(url, {
         headers,
       })
 
@@ -142,6 +168,26 @@ function App() {
     } catch (error) {
       console.error('Logout error:', error)
     }
+  }
+
+  const handleSearch = async (e) => {
+    e.preventDefault()
+    await fetchStudents(searchParams)
+  }
+
+  const handleResetSearch = () => {
+    setSearchParams({
+      idNumber: '',
+      lastName: '',
+      firstName: '',
+      grade: '',
+      stream: '',
+      gender: '',
+      track: '',
+      status: '',
+      cycle: ''
+    })
+    fetchStudents()
   }
 
   const getAuthHeaders = async () => {
@@ -301,6 +347,7 @@ function App() {
       'field_update': 'עדכון שדה',
       'location_change': 'שינוי מיקום',
       'deleted': 'נמחק',
+      'start_studies': 'התחלת לימודים',
     }
     return labels[changeType] || changeType
   }
@@ -311,6 +358,7 @@ function App() {
       'field_update': 'bg-blue-100 text-blue-800',
       'location_change': 'bg-purple-100 text-purple-800',
       'deleted': 'bg-red-100 text-red-800',
+      'start_studies': 'bg-emerald-100 text-emerald-800',
     }
     return colors[changeType] || 'bg-gray-100 text-gray-800'
   }
@@ -381,11 +429,159 @@ function App() {
                 <h2 className="text-lg font-bold text-white">מרשם לומדים</h2>
                 <p className="mt-1 text-xs text-blue-100">רשימת לומדים רשומים</p>
               </div>
-              <div className="bg-white/20 backdrop-blur-sm rounded-lg px-3 py-1.5">
-                <p className="text-white text-sm font-semibold">{students.length} תלמידים</p>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setShowSearch(!showSearch)}
+                  className="px-3 py-1.5 bg-white/20 backdrop-blur-sm text-white rounded-lg hover:bg-white/30 transition-all text-sm font-medium flex items-center gap-1.5"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                  {showSearch ? 'סגור חיפוש' : 'חיפוש'}
+                </button>
+                <div className="bg-white/20 backdrop-blur-sm rounded-lg px-3 py-1.5">
+                  <p className="text-white text-sm font-semibold">{students.length} תלמידים</p>
+                </div>
               </div>
             </div>
           </div>
+
+          {/* Search Form */}
+          {showSearch && (
+            <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
+              <form onSubmit={handleSearch} className="space-y-3">
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">תעודת זהות</label>
+                    <input
+                      type="text"
+                      value={searchParams.idNumber}
+                      onChange={(e) => setSearchParams({ ...searchParams, idNumber: e.target.value })}
+                      className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="חיפוש..."
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">שם משפחה</label>
+                    <input
+                      type="text"
+                      value={searchParams.lastName}
+                      onChange={(e) => setSearchParams({ ...searchParams, lastName: e.target.value })}
+                      className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="חיפוש..."
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">שם פרטי</label>
+                    <input
+                      type="text"
+                      value={searchParams.firstName}
+                      onChange={(e) => setSearchParams({ ...searchParams, firstName: e.target.value })}
+                      className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="חיפוש..."
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">כיתה</label>
+                    <select
+                      value={searchParams.grade}
+                      onChange={(e) => setSearchParams({ ...searchParams, grade: e.target.value })}
+                      className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="">הכל</option>
+                      <option value="ט'">ט'</option>
+                      <option value="י'">י'</option>
+                      <option value='י"א'>י"א</option>
+                      <option value='י"ב'>י"ב</option>
+                      <option value='י"ג'>י"ג</option>
+                      <option value='י"ד'>י"ד</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">מקבילה</label>
+                    <select
+                      value={searchParams.stream}
+                      onChange={(e) => setSearchParams({ ...searchParams, stream: e.target.value })}
+                      className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="">הכל</option>
+                      <option value="1">1</option>
+                      <option value="2">2</option>
+                      <option value="3">3</option>
+                      <option value="4">4</option>
+                      <option value="5">5</option>
+                      <option value="6">6</option>
+                      <option value="7">7</option>
+                      <option value="8">8</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">מין</label>
+                    <select
+                      value={searchParams.gender}
+                      onChange={(e) => setSearchParams({ ...searchParams, gender: e.target.value })}
+                      className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="">הכל</option>
+                      <option value="זכר">זכר</option>
+                      <option value="נקבה">נקבה</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">מגמה</label>
+                    <input
+                      type="text"
+                      value={searchParams.track}
+                      onChange={(e) => setSearchParams({ ...searchParams, track: e.target.value })}
+                      className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="חיפוש..."
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">סטטוס</label>
+                    <select
+                      value={searchParams.status}
+                      onChange={(e) => setSearchParams({ ...searchParams, status: e.target.value })}
+                      className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="">הכל</option>
+                      <option value="לומד">לומד</option>
+                      <option value="סיים לימודים">סיים לימודים</option>
+                      <option value="הפסיק לימודים">הפסיק לימודים</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">מחזור</label>
+                    <input
+                      type="text"
+                      value={searchParams.cycle}
+                      onChange={(e) => setSearchParams({ ...searchParams, cycle: e.target.value })}
+                      className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                      placeholder="חיפוש..."
+                    />
+                  </div>
+                </div>
+                <div className="flex gap-2 justify-end">
+                  <button
+                    type="button"
+                    onClick={handleResetSearch}
+                    className="px-4 py-1.5 text-sm text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors font-medium"
+                  >
+                    איפוס
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors font-medium flex items-center gap-1.5"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    חפש
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
 
           {loading && (
             <div className="px-6 py-8 text-center">
@@ -608,23 +804,39 @@ function App() {
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-600 mb-1">כיתה</label>
-                      <input
-                        type="text"
+                      <select
                         value={editFormData.grade || ''}
                         onChange={(e) => setEditFormData({ ...editFormData, grade: e.target.value })}
                         className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white"
                         required
-                      />
+                      >
+                        <option value="">בחר כיתה</option>
+                        <option value="ט'">ט'</option>
+                        <option value="י'">י'</option>
+                        <option value='י"א'>י"א</option>
+                        <option value='י"ב'>י"ב</option>
+                        <option value='י"ג'>י"ג</option>
+                        <option value='י"ד'>י"ד</option>
+                      </select>
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-600 mb-1">מקבילה</label>
-                      <input
-                        type="text"
+                      <select
                         value={editFormData.stream || ''}
                         onChange={(e) => setEditFormData({ ...editFormData, stream: e.target.value })}
                         className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white"
                         required
-                      />
+                      >
+                        <option value="">בחר מקבילה</option>
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                        <option value="5">5</option>
+                        <option value="6">6</option>
+                        <option value="7">7</option>
+                        <option value="8">8</option>
+                      </select>
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-600 mb-1">מין</label>
@@ -801,47 +1013,48 @@ function App() {
                   </div>
                   <div className="relative">
                     {/* Timeline line */}
-                    <div className="absolute right-8 top-0 bottom-0 w-0.5 bg-gradient-to-b from-blue-200 via-indigo-200 to-blue-200"></div>
+                    <div className="absolute right-6 top-0 bottom-0 w-0.5 bg-gray-200"></div>
                     
-                    <div className="space-y-6">
+                    <div className="space-y-4">
                       {history.map((item, index) => (
-                        <div key={item.id} className="relative pr-10">
+                        <div key={item.id} className="relative pr-8">
                           {/* Timeline dot */}
-                          <div className={`absolute right-5 top-2 w-3 h-3 rounded-full border-3 border-white shadow-md ${
+                          <div className={`absolute right-4 top-3 w-2.5 h-2.5 rounded-full border-2 border-white shadow-sm ${
                             item.changeType === 'created' ? 'bg-green-500' :
                             item.changeType === 'field_update' ? 'bg-blue-500' :
                             item.changeType === 'location_change' ? 'bg-purple-500' :
+                            item.changeType === 'start_studies' ? 'bg-emerald-500' :
                             'bg-red-500'
                           }`}></div>
                           
-                          <div className="bg-white rounded-lg shadow-md hover:shadow-lg transition-all border border-gray-100 overflow-hidden">
-                            <div className="p-4">
-                              <div className="flex justify-between items-start mb-2">
-                                <span className={`px-2 py-1 inline-flex text-xs font-bold rounded-lg ${getChangeTypeColor(item.changeType)} border`}>
+                          <div className="bg-white rounded-md border border-gray-200 hover:border-gray-300 transition-all shadow-sm hover:shadow">
+                            <div className="p-3">
+                              <div className="flex justify-between items-center mb-2">
+                                <span className={`px-2 py-0.5 inline-flex text-xs font-semibold rounded ${getChangeTypeColor(item.changeType)}`}>
                                   {getChangeTypeLabel(item.changeType)}
                                 </span>
-                                <span className="text-xs font-semibold text-gray-600 bg-gray-100 px-2 py-1 rounded-lg">
+                                <span className="text-xs text-gray-500">
                                   {formatDate(item.createdAt)}
                                 </span>
                               </div>
                               
                               {item.changeDescription && (
-                                <p className="text-sm text-gray-800 mb-2 font-semibold">{item.changeDescription}</p>
+                                <p className="text-xs text-gray-700 mb-2">{item.changeDescription}</p>
                               )}
                               
                               {item.fieldName && (
-                                <div className="bg-gradient-to-r from-gray-50 to-blue-50 p-3 rounded-lg border border-gray-200 mb-2">
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-bold text-xs text-gray-700">{item.fieldName}:</span>
+                                <div className="bg-gray-50 p-2 rounded border border-gray-100 mb-2">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-xs font-medium text-gray-600">{item.fieldName}:</span>
                                     {item.oldValue && (
-                                      <span className="text-red-600 line-through font-medium px-1.5 py-0.5 bg-red-50 rounded text-xs"> {item.oldValue}</span>
+                                      <span className="text-xs text-red-600 line-through bg-red-50 px-1.5 py-0.5 rounded"> {item.oldValue}</span>
                                     )}
                                     {item.newValue && (
                                       <>
                                         <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                                         </svg>
-                                        <span className="text-green-700 font-bold px-1.5 py-0.5 bg-green-50 rounded text-xs"> {item.newValue}</span>
+                                        <span className="text-xs text-green-700 font-medium bg-green-50 px-1.5 py-0.5 rounded"> {item.newValue}</span>
                                       </>
                                     )}
                                   </div>
@@ -849,23 +1062,23 @@ function App() {
                               )}
                               
                               {item.location && (
-                                <div className="flex items-center gap-2 text-xs text-gray-700 mb-2 bg-purple-50 px-2 py-1.5 rounded-lg">
-                                  <svg className="w-3 h-3 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <div className="flex items-center gap-1.5 text-xs text-gray-600 mb-2">
+                                  <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
                                   </svg>
                                   <span className="font-medium">מיקום:</span>
-                                  <span className="text-gray-800">{item.location}</span>
+                                  <span>{item.location}</span>
                                 </div>
                               )}
                               
                               {item.changedBy && (
-                                <div className="flex items-center gap-1.5 text-xs text-gray-500 pt-2 border-t border-gray-200">
+                                <div className="flex items-center gap-1.5 text-xs text-gray-500 pt-2 border-t border-gray-100">
                                   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                                   </svg>
                                   <span>שונה על ידי:</span>
-                                  <span className="font-semibold text-gray-700">{item.changedBy}</span>
+                                  <span className="font-medium text-gray-700">{item.changedBy}</span>
                                 </div>
                               )}
                             </div>

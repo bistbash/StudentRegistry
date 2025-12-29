@@ -82,15 +82,56 @@ async function initDatabase(retries = 5, delay = 2000) {
 
     if (count === 0) {
       console.log('Inserting sample data...');
-      await pool.query(`
+      const insertResult = await pool.query(`
         INSERT INTO students (id_number, last_name, first_name, grade, stream, gender, track, status, cycle)
         VALUES
           ('123456789', 'כהן', 'דוד', 'ט''', '1', 'זכר', 'מדעי המחשב', 'לומד', '2024'),
           ('987654321', 'לוי', 'שרה', 'י"א', '3', 'נקבה', 'מתמטיקה', 'לומד', '2025'),
           ('456789123', 'ישראלי', 'יוסי', 'י"ב', '5', 'זכר', 'פיזיקה', 'הפסיק לימודים', '2024'),
           ('789123456', 'דוד', 'מיכל', 'י"ד', '8', 'נקבה', 'ביולוגיה', 'סיים לימודים', '2026')
+        RETURNING id, created_at, first_name, last_name, id_number
       `);
+      
+      // Add "start_studies" history entry for each student
+      for (const student of insertResult.rows) {
+        await pool.query(`
+          INSERT INTO student_history (student_id, change_type, change_description, created_at)
+          VALUES ($1, $2, $3, $4)
+        `, [
+          student.id,
+          'start_studies',
+          `התחלת לימודים - ${student.first_name} ${student.last_name} (ת.ז: ${student.id_number})`,
+          student.created_at
+        ]);
+      }
+      
       console.log('Sample data inserted successfully');
+    } else {
+      // Add "start_studies" history entry for existing students that don't have it
+      const existingStudents = await pool.query(`
+        SELECT s.id, s.created_at, s.first_name, s.last_name, s.id_number
+        FROM students s
+        WHERE NOT EXISTS (
+          SELECT 1 FROM student_history sh 
+          WHERE sh.student_id = s.id AND sh.change_type = 'start_studies'
+        )
+      `);
+      
+      for (const student of existingStudents.rows) {
+        await pool.query(`
+          INSERT INTO student_history (student_id, change_type, change_description, created_at)
+          VALUES ($1, $2, $3, $4)
+        `, [
+          student.id,
+          'start_studies',
+          `התחלת לימודים - ${student.first_name} ${student.last_name} (ת.ז: ${student.id_number})`,
+          student.created_at
+        ]);
+      }
+      
+      if (existingStudents.rows.length > 0) {
+        console.log(`Added start_studies history for ${existingStudents.rows.length} existing students`);
+      }
     }
 
       console.log('Database initialized successfully');
@@ -123,13 +164,102 @@ const StudentModel = {
           gender,
           track,
           status,
-          cycle
+          cycle,
+          created_at as "createdAt",
+          updated_at as "updatedAt"
         FROM students
         ORDER BY id ASC
       `);
       return result.rows;
     } catch (error) {
       console.error('Error fetching all students:', error);
+      throw error;
+    }
+  },
+
+  // Search students by parameters
+  async search(searchParams) {
+    try {
+      let query = `
+        SELECT 
+          id,
+          id_number as "idNumber",
+          last_name as "lastName",
+          first_name as "firstName",
+          grade,
+          stream,
+          gender,
+          track,
+          status,
+          cycle,
+          created_at as "createdAt",
+          updated_at as "updatedAt"
+        FROM students
+        WHERE 1=1
+      `;
+      const params = [];
+      let paramIndex = 1;
+
+      if (searchParams.idNumber) {
+        query += ` AND id_number ILIKE $${paramIndex}`;
+        params.push(`%${searchParams.idNumber}%`);
+        paramIndex++;
+      }
+
+      if (searchParams.lastName) {
+        query += ` AND last_name ILIKE $${paramIndex}`;
+        params.push(`%${searchParams.lastName}%`);
+        paramIndex++;
+      }
+
+      if (searchParams.firstName) {
+        query += ` AND first_name ILIKE $${paramIndex}`;
+        params.push(`%${searchParams.firstName}%`);
+        paramIndex++;
+      }
+
+      if (searchParams.grade) {
+        query += ` AND grade = $${paramIndex}`;
+        params.push(searchParams.grade);
+        paramIndex++;
+      }
+
+      if (searchParams.stream) {
+        query += ` AND stream = $${paramIndex}`;
+        params.push(searchParams.stream);
+        paramIndex++;
+      }
+
+      if (searchParams.gender) {
+        query += ` AND gender = $${paramIndex}`;
+        params.push(searchParams.gender);
+        paramIndex++;
+      }
+
+      if (searchParams.track) {
+        query += ` AND track ILIKE $${paramIndex}`;
+        params.push(`%${searchParams.track}%`);
+        paramIndex++;
+      }
+
+      if (searchParams.status) {
+        query += ` AND status = $${paramIndex}`;
+        params.push(searchParams.status);
+        paramIndex++;
+      }
+
+      if (searchParams.cycle) {
+        query += ` AND cycle = $${paramIndex}`;
+        params.push(searchParams.cycle);
+        paramIndex++;
+      }
+
+      query += ` ORDER BY id ASC`;
+
+      const result = await pool.query(query, params);
+      return result.rows;
+    } catch (error) {
+      console.error('Error searching students:', error);
       throw error;
     }
   },
@@ -148,7 +278,9 @@ const StudentModel = {
           gender,
           track,
           status,
-          cycle
+          cycle,
+          created_at as "createdAt",
+          updated_at as "updatedAt"
         FROM students
         WHERE id = $1
       `, [id]);
@@ -175,7 +307,9 @@ const StudentModel = {
           gender,
           track,
           status,
-          cycle
+          cycle,
+          created_at as "createdAt",
+          updated_at as "updatedAt"
       `, [
         studentData.idNumber,
         studentData.lastName,
@@ -190,7 +324,27 @@ const StudentModel = {
       
       const student = result.rows[0];
       
-      // Log creation in history
+      // Get the created_at timestamp for start date
+      const studentWithDate = await pool.query(`
+        SELECT created_at FROM students WHERE id = $1
+      `, [student.id]);
+      
+      const startDate = studentWithDate.rows[0].created_at;
+      
+      // Log start of studies in history with the creation date
+      await pool.query(`
+        INSERT INTO student_history (student_id, change_type, change_description, location, changed_by, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `, [
+        student.id,
+        'start_studies',
+        `התחלת לימודים - ${studentData.firstName} ${studentData.lastName} (ת.ז: ${studentData.idNumber})`,
+        location,
+        userId,
+        startDate
+      ]);
+      
+      // Also log creation
       await pool.query(`
         INSERT INTO student_history (student_id, change_type, change_description, location, changed_by)
         VALUES ($1, $2, $3, $4, $5)
@@ -242,7 +396,9 @@ const StudentModel = {
           gender,
           track,
           status,
-          cycle
+          cycle,
+          created_at as "createdAt",
+          updated_at as "updatedAt"
       `, [
         studentData.idNumber,
         studentData.lastName,

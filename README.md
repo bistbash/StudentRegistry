@@ -117,13 +117,55 @@ docker exec -it student-registry-db psql -U postgres -d student_registry
 
 ### API Endpoints
 
+#### Public Endpoints
 - `GET /api/health` - Health check endpoint
+- `GET /api` - API documentation endpoint
 - `GET /api/auth/config` - Get authentication configuration
-- `GET /api/students` - Get all students (requires auth if enabled)
-- `GET /api/students/:id` - Get a specific student by ID (requires auth if enabled)
-- `POST /api/students` - Create a new student (requires auth if enabled)
-- `PUT /api/students/:id` - Update a student (requires auth if enabled)
-- `DELETE /api/students/:id` - Delete a student (requires auth if enabled)
+
+#### Student Endpoints (require auth if enabled)
+- `GET /api/students` - Get all students or search students (supports query parameters)
+- `GET /api/students/:id` - Get a specific student by ID
+- `POST /api/students` - Create a new student
+- `PUT /api/students/:id` - Update a student
+- `DELETE /api/students/:id` - Delete a student
+- `GET /api/students/:id/history` - Get student history
+- `POST /api/students/:id/location` - Add location change for student
+
+#### Search Parameters
+The `GET /api/students` endpoint supports the following query parameters for filtering:
+- `idNumber` - Search by ID number (partial match)
+- `lastName` - Search by last name (partial match)
+- `firstName` - Search by first name (partial match)
+- `grade` - Filter by grade (exact match)
+- `stream` - Filter by stream (exact match)
+- `gender` - Filter by gender (exact match: זכר/נקבה)
+- `track` - Search by track (partial match)
+- `status` - Filter by status (exact match: לומד/סיים לימודים/הפסיק לימודים)
+- `cycle` - Filter by cycle (exact match)
+
+**Example:**
+```bash
+# Get all students
+GET /api/students
+
+# Search by last name
+GET /api/students?lastName=כהן
+
+# Filter by status and grade
+GET /api/students?status=לומד&grade=ט'
+```
+
+#### API Documentation
+For complete API documentation, see [API.md](./API.md) or visit `GET /api` endpoint.
+
+#### External Systems Integration
+The API is designed to be used by external systems. Key features:
+- **CORS enabled** - Configure allowed origins via `ALLOWED_ORIGINS` environment variable
+- **RESTful design** - Standard HTTP methods and status codes
+- **JSON responses** - All responses in JSON format
+- **Comprehensive data** - Includes timestamps (createdAt, updatedAt) for all records
+- **Search capabilities** - Flexible search and filtering options
+- **History tracking** - Complete audit trail for all changes
 
 ### Development
 
