@@ -312,7 +312,6 @@ GET /api/students/:id/history
 ```
 
 **Change Types:**
-- `start_studies` - התחלת לימודים
 - `created` - נוצר תלמיד חדש
 - `field_update` - עדכון שדה
 - `location_change` - שינוי מיקום
@@ -358,6 +357,206 @@ curl -X POST http://localhost:3001/api/students/1/location \
   -d '{
     "location": "כיתה 12"
   }'
+```
+
+---
+
+### Upload Excel File from משו"ב
+```
+POST /api/students/upload-excel
+```
+**Authentication:** נדרש אם מופעל
+
+**Request Body:**
+- `file` - קובץ אקסל (multipart/form-data, .xlsx או .xls)
+
+**Excel File Format:**
+- כל גיליון = שכבה (בתא A1 צריך להיות "שכבה X")
+- שורה 3 = כותרות: ת.ז, שם משפחה, שם פרטי, כיתה, מקבילה, מין, מגמה
+- שורות 4+ = נתוני תלמידים
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "קובץ עובד בהצלחה",
+  "results": {
+    "processed": 100,
+    "created": 10,
+    "updated": 85,
+    "skipped": 5,
+    "errors": []
+  }
+}
+```
+
+**Example:**
+```bash
+curl -X POST http://localhost:3001/api/students/upload-excel \
+  -H "Authorization: Bearer <token>" \
+  -F "file=@students.xlsx"
+```
+
+---
+
+### Delete All Students
+```
+DELETE /api/students/all
+```
+**Authentication:** נדרש (superuser בלבד)
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "נמחקו 100 תלמידים בהצלחה",
+  "deletedCount": 100
+}
+```
+
+**Example:**
+```bash
+curl -X DELETE http://localhost:3001/api/students/all \
+  -H "Authorization: Bearer <token>"
+```
+
+**Warning:** פעולה זו בלתי הפיכה וממחקת את כל התלמידים ואת ההיסטוריה שלהם!
+
+---
+
+## Authentik User Management Endpoints
+
+**הערה:** כל ה-endpoints הבאים דורשים הרשאות superuser ומשתמשים ב-service account כדי לבצע פעולות ב-Authentik API.
+
+### Get All Users from Authentik
+```
+GET /api/authentik/users
+```
+**Authentication:** נדרש (superuser בלבד)
+
+**Response:**
+```json
+{
+  "results": [
+    {
+      "pk": "user-id",
+      "username": "user123",
+      "email": "user@example.com",
+      "name": "שם משתמש",
+      "groups": [
+        {
+          "pk": "group-id",
+          "name": "makas"
+        }
+      ],
+      "attributes": {
+        "class_grade": "ט",
+        "class_stream": "1"
+      }
+    }
+  ]
+}
+```
+
+**Example:**
+```bash
+curl -X GET http://localhost:3001/api/authentik/users \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+### Add User to Makas Group
+```
+POST /api/authentik/users/:userId/add-makas-group
+```
+**Authentication:** נדרש (superuser בלבד)
+
+**Parameters:**
+- `userId` - מזהה המשתמש ב-Authentik (pk)
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "משתמש נוסף לקבוצת makas"
+}
+```
+
+**Example:**
+```bash
+curl -X POST http://localhost:3001/api/authentik/users/user-id/add-makas-group \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+### Update User Attributes (Class Assignment)
+```
+PATCH /api/authentik/users/:userId/attributes
+```
+**Authentication:** נדרש (superuser בלבד)
+
+**Parameters:**
+- `userId` - מזהה המשתמש ב-Authentik (pk)
+
+**Request Body:**
+```json
+{
+  "grade": "ט",
+  "stream": "1"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "תכונות משתמש עודכנו"
+}
+```
+
+**Example:**
+```bash
+curl -X PATCH http://localhost:3001/api/authentik/users/user-id/attributes \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{
+    "grade": "ט",
+    "stream": "1"
+  }'
+```
+
+---
+
+### Get User Details
+```
+GET /api/authentik/users/:userId
+```
+**Authentication:** נדרש (superuser בלבד)
+
+**Parameters:**
+- `userId` - מזהה המשתמש ב-Authentik (pk)
+
+**Response:**
+```json
+{
+  "pk": "user-id",
+  "username": "user123",
+  "email": "user@example.com",
+  "name": "שם משתמש",
+  "groups": [...],
+  "attributes": {
+    "class_grade": "ט",
+    "class_stream": "1"
+  }
+}
+```
+
+**Example:**
+```bash
+curl -X GET http://localhost:3001/api/authentik/users/user-id \
+  -H "Authorization: Bearer <token>"
 ```
 
 ---

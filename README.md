@@ -58,6 +58,9 @@ This will:
    # Authentik Configuration (Optional)
    AUTHENTIK_CLIENT_ID=your-client-id-here
    AUTHENTIK_ISSUER=http://192.168.100.12:9001/application/o/student-registry/
+   # Service Account (Optional - for backend-to-Authentik authentication)
+   AUTHENTIK_SERVICE_USERNAME=your-service-account-username
+   AUTHENTIK_SERVICE_PASSWORD=your-service-account-password
    VITE_API_URL=http://192.168.100.12:3001
    VITE_AUTHENTIK_URL=http://192.168.100.12:9001
    VITE_AUTHENTIK_ISSUER=http://192.168.100.12:9001/application/o/student-registry/

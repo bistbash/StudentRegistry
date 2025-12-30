@@ -34,6 +34,10 @@ function App() {
   const [editFormData, setEditFormData] = useState(null)
   const [saving, setSaving] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
+  const [uploadingExcel, setUploadingExcel] = useState(false)
+  const [uploadResult, setUploadResult] = useState(null)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [itemsPerPage, setItemsPerPage] = useState(25)
   const [searchParams, setSearchParams] = useState({
     idNumber: '',
     lastName: '',
@@ -45,6 +49,7 @@ function App() {
     status: '',
     cycle: ''
   })
+  const [isSuperuser, setIsSuperuser] = useState(false)
 
   const processCallback = async () => {
     setProcessingCallback(true)
@@ -64,18 +69,68 @@ function App() {
   }
 
   useEffect(() => {
-    initAuth()
+    const manager = initAuth()
     
-    // Check if we're processing a callback (OAuth callback contains code parameter)
-    const urlParams = new URLSearchParams(window.location.search)
-    if (urlParams.has('code')) {
-      processCallback()
+    // Set up token renewal listener
+    if (manager) {
+      const handleUserLoaded = () => {
+        // Token was renewed, update user state
+        manager.getUser().then(userData => {
+          if (userData) {
+            setUser(userData)
+          }
+        }).catch(err => {
+          console.error('Error getting user after renewal:', err)
+        })
+      }
+      
+      manager.events.addUserLoaded(handleUserLoaded)
+      
+      // Check if we're processing a callback (OAuth callback contains code parameter)
+      const urlParams = new URLSearchParams(window.location.search)
+      if (urlParams.has('code')) {
+        processCallback()
+      }
+    } else {
+      // Check if we're processing a callback even if no manager
+      const urlParams = new URLSearchParams(window.location.search)
+      if (urlParams.has('code')) {
+        processCallback()
+      }
     }
   }, [])
+
+  const checkSuperuserStatus = async () => {
+    if (!authEnabled || !user) {
+      setIsSuperuser(false)
+      return
+    }
+    try {
+      const headers = await getAuthHeaders()
+      const response = await fetch(`${API_URL}/api/auth/user`, { headers })
+      if (response.ok) {
+        try {
+          const userData = await response.json()
+          console.log('Superuser check result:', userData)
+          setIsSuperuser(userData.isSuperuser || false)
+        } catch (parseError) {
+          console.error('Error parsing superuser check response:', parseError)
+          setIsSuperuser(false)
+        }
+      } else {
+        console.error('Failed to check superuser status:', response.status)
+        setIsSuperuser(false)
+      }
+    } catch (error) {
+      console.error('Error checking superuser status:', error)
+      setIsSuperuser(false)
+    }
+  }
 
   useEffect(() => {
     if (!authLoading && !processingCallback) {
       fetchStudents()
+      checkSuperuserStatus()
     }
   }, [user, authLoading, processingCallback])
 
@@ -136,13 +191,33 @@ function App() {
       if (!response.ok) {
         const errorText = await response.text()
         console.error('Failed to fetch students:', response.status, errorText)
-        throw new Error(`נכשל בטעינת רשימת הלומדים: ${response.status}`)
+        let errorData
+        try {
+          errorData = JSON.parse(errorText)
+        } catch {
+          errorData = { error: errorText || `שגיאה ${response.status}` }
+        }
+        throw new Error(errorData.error || `נכשל בטעינת רשימת הלומדים: ${response.status}`)
       }
 
-      const data = await response.json()
+      let data
+      try {
+        const responseText = await response.text()
+        if (!responseText) {
+          data = []
+        } else {
+          data = JSON.parse(responseText)
+        }
+      } catch (parseError) {
+        console.error('Error parsing students response:', parseError)
+        throw new Error('שגיאה בפרסור תגובת השרת')
+      }
       console.log('Received students data:', data)
       console.log('Number of students:', data.length)
-      setStudents(data)
+      
+      // Sort students: active cycles first, then by grade, then by last name
+      const sortedStudents = sortStudents(data)
+      setStudents(sortedStudents)
       setError(null)
     } catch (err) {
       setError(err.message)
@@ -187,7 +262,76 @@ function App() {
       status: '',
       cycle: ''
     })
+    setCurrentPage(1)
     fetchStudents()
+  }
+
+  // Calculate pagination
+  const totalPages = Math.ceil(students.length / itemsPerPage)
+  const startIndex = (currentPage - 1) * itemsPerPage
+  const endIndex = startIndex + itemsPerPage
+  const currentStudents = students.slice(startIndex, endIndex)
+
+  // Reset to page 1 when students change
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [students.length])
+
+  const handleUploadExcel = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    // Check file type
+    if (!file.name.match(/\.(xlsx|xls)$/i)) {
+      setError('קובץ לא תקין. יש להעלות קובץ אקסל (.xlsx או .xls)')
+      return
+    }
+
+    try {
+      setUploadingExcel(true)
+      setError(null)
+      setUploadResult(null)
+
+      const headers = await getAuthHeaders()
+      const formData = new FormData()
+      formData.append('file', file)
+
+      const response = await fetch(`${API_URL}/api/students/upload-excel`, {
+        method: 'POST',
+        headers,
+        body: formData
+      })
+
+      if (response.status === 401) {
+        setError('ההרשאה פגה. אנא התחבר מחדש.')
+        return
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        let errorData
+        try {
+          errorData = JSON.parse(errorText)
+        } catch {
+          errorData = { error: errorText || `שגיאה ${response.status}` }
+        }
+        throw new Error(errorData.error || 'שגיאה בהעלאת הקובץ')
+      }
+
+      const result = await response.json()
+      setUploadResult(result.results)
+      
+      // Refresh students list
+      await fetchStudents()
+      
+      // Clear file input
+      e.target.value = ''
+    } catch (err) {
+      setError(err.message || 'שגיאה בהעלאת קובץ אקסל')
+      console.error('Error uploading Excel:', err)
+    } finally {
+      setUploadingExcel(false)
+    }
   }
 
   const getAuthHeaders = async () => {
@@ -258,7 +402,17 @@ function App() {
   const handleViewHistory = async (student) => {
     setSelectedStudent(student)
     setShowHistoryModal(true)
-    setEditFormData({ ...student })
+    const formData = { ...student }
+    // אם המחזור לא פעיל, אפס את הכיתה ותקן את הסטטוס
+    const cycleStatus = formData.cycle ? getCycleStatus(formData.cycle) : null
+    if (cycleStatus && cycleStatus !== 'active') {
+      formData.grade = ''
+      // אם הסטטוס הוא "לומד" למחזור לא פעיל, שנה אותו
+      if (formData.status === 'לומד') {
+        formData.status = cycleStatus === 'ended' ? 'סיים לימודים' : 'הפסיק לימודים'
+      }
+    }
+    setEditFormData(formData)
     await fetchHistory(student.id)
   }
 
@@ -272,6 +426,20 @@ function App() {
       const headers = await getAuthHeaders()
       headers['Content-Type'] = 'application/json'
       
+      // בדוק את סטטוס המחזור - זה הקריטריון העיקרי
+      const cycleStatus = editFormData.cycle ? getCycleStatus(editFormData.cycle) : null
+      const isCycleActive = cycleStatus === 'active'
+      
+      // הכיתה: רק למחזורים פעילים
+      const grade = isCycleActive ? editFormData.grade : ''
+      
+      // הסטטוס: למחזורים לא פעילים לא יכול להיות "לומד"
+      let status = editFormData.status
+      if (!isCycleActive && status === 'לומד') {
+        // תיקון אוטומטי: מחזור נגמר -> "סיים לימודים", מחזור עתידי -> "הפסיק לימודים"
+        status = cycleStatus === 'ended' ? 'סיים לימודים' : 'הפסיק לימודים'
+      }
+      
       console.log('Updating student:', selectedStudent.id, editFormData)
       
       const response = await fetch(`${API_URL}/api/students/${selectedStudent.id}`, {
@@ -281,11 +449,11 @@ function App() {
           idNumber: editFormData.idNumber,
           lastName: editFormData.lastName,
           firstName: editFormData.firstName,
-          grade: editFormData.grade,
+          grade: grade,
           stream: editFormData.stream,
           gender: editFormData.gender,
           track: editFormData.track,
-          status: editFormData.status,
+          status: status,
           cycle: editFormData.cycle,
         }),
       })
@@ -363,6 +531,222 @@ function App() {
     return colors[changeType] || 'bg-gray-100 text-gray-800'
   }
 
+  // Helper functions for cycle-grade relationship
+  const gradeOrder = ["ט'", "י'", 'י"א', 'י"ב', 'י"ג', 'י"ד']
+  const activeGrades = ["ט'", "י'", 'י"א', 'י"ב', 'י"ג', 'י"ד'] // כל הכיתות פעילות
+  const LAST_GRADE_INDEX = gradeOrder.length - 1 // י"ד
+  
+  const isActiveGrade = (grade) => {
+    return activeGrades.includes(grade)
+  }
+
+  // Get cycle status: 'active', 'ended', 'future'
+  const getCycleStatus = (cycle, currentYear = null) => {
+    if (!cycle) return null
+    
+    if (!currentYear) {
+      currentYear = getCurrentYear()
+    }
+    
+    const cycleYear = parseInt(cycle)
+    if (isNaN(cycleYear)) return null
+    
+    const yearDiff = currentYear - cycleYear
+    
+    if (yearDiff < 0) {
+      return 'future' // מחזור עתידי
+    }
+    
+    if (yearDiff > LAST_GRADE_INDEX) {
+      return 'ended' // מחזור נגמר (סיים י"ד)
+    }
+    
+    return 'active' // מחזור פעיל (ט' - י"ד)
+  }
+
+  // Calculate grade from cycle based on current date (only for active cycles)
+  const calculateGradeFromCycle = (cycle, currentYear = null) => {
+    if (!cycle) return null
+    
+    if (!currentYear) {
+      currentYear = getCurrentYear()
+    }
+    
+    const cycleStatus = getCycleStatus(cycle, currentYear)
+    
+    // מחזור פעיל: מחזיר את הכיתה
+    if (cycleStatus === 'active') {
+      const cycleYear = parseInt(cycle)
+      const yearDiff = currentYear - cycleYear
+      return gradeOrder[yearDiff]
+    }
+    
+    // מחזור לא פעיל או עתידי: לא מחזיר כיתה
+    return null
+  }
+  
+  // Get cycle display text (grade, "מחזור נגמר", or future date)
+  const getCycleDisplayText = (cycle, currentYear = null) => {
+    if (!cycle) return null
+    
+    if (!currentYear) {
+      currentYear = getCurrentYear()
+    }
+    
+    const cycleStatus = getCycleStatus(cycle, currentYear)
+    
+    if (cycleStatus === 'active') {
+      // מחזור פעיל: מחזיר את הכיתה
+      return calculateGradeFromCycle(cycle, currentYear)
+    }
+    
+    if (cycleStatus === 'ended') {
+      // מחזור נגמר: מחזיר "מחזור נגמר"
+      return 'מחזור נגמר'
+    }
+    
+    if (cycleStatus === 'future') {
+      // מחזור עתידי: מחזיר מתי הוא צפוי להיפתח
+      const cycleYear = parseInt(cycle)
+      return `צפוי להיפתח: 01.09.${cycleYear}`
+    }
+    
+    return null
+  }
+  
+  // Helper to get expected grade for a student based on their cycle
+  const getExpectedGradeForStudent = (student) => {
+    if (!student || !student.cycle) return null
+    return calculateGradeFromCycle(student.cycle)
+  }
+  
+  // Check if student's grade matches expected grade from cycle
+  const isGradeMatchingCycle = (student) => {
+    if (!student || !student.cycle || !student.grade) return true // אם אין מחזור או כיתה, נחשב כתואם
+    const expectedGrade = getExpectedGradeForStudent(student)
+    if (!expectedGrade) return true // אם לא ניתן לחשב, נחשב כתואם
+    return student.grade === expectedGrade
+  }
+
+  const calculateCycleFromGrade = (grade, currentYear) => {
+    if (!grade || !currentYear) return null
+    
+    const gradeIndex = gradeOrder.indexOf(grade)
+    if (gradeIndex === -1) return null // כיתה לא פעילה
+    
+    // מחזור = שנה נוכחית - מספר שנים מאז ט'
+    const cycleYear = currentYear - gradeIndex
+    
+    // בדיקה שהמחזור הוא מספר תקין (בין 2000 לשנה הנוכחית + 1)
+    if (cycleYear < 2000 || cycleYear > currentYear + 1) return null
+    
+    return cycleYear.toString()
+  }
+
+  const getCurrentYear = () => {
+    const now = new Date()
+    const year = now.getFullYear()
+    const month = now.getMonth() + 1 // 1-12
+    
+    // אם אנחנו אחרי ספטמבר (חודש 9), השנה הלימודית היא השנה הנוכחית
+    // אם אנחנו לפני ספטמבר, השנה הלימודית היא השנה הקודמת
+    // למשל: אם אנחנו בינואר 2025, השנה הלימודית היא 2024
+    // אם אנחנו באוקטובר 2024, השנה הלימודית היא 2024
+    if (month >= 9) {
+      return year
+    } else {
+      return year - 1
+    }
+  }
+
+  // Sort students: active cycles first, then by grade (ט' to י"ד), then by stream (1-8), then by last name
+  const sortStudents = (students) => {
+    if (!students || students.length === 0) return students
+    
+    const currentYear = getCurrentYear()
+    
+    return [...students].sort((a, b) => {
+      // 1. First: separate active cycles from non-active
+      const aCycleStatus = a.cycle ? getCycleStatus(a.cycle, currentYear) : null
+      const bCycleStatus = b.cycle ? getCycleStatus(b.cycle, currentYear) : null
+      
+      const aIsActive = aCycleStatus === 'active'
+      const bIsActive = bCycleStatus === 'active'
+      
+      // Active cycles come first
+      if (aIsActive && !bIsActive) return -1
+      if (!aIsActive && bIsActive) return 1
+      
+      // If both are active or both are inactive, continue sorting
+      if (aIsActive && bIsActive) {
+        // 2. Sort by grade (ט' -> י' -> י"א -> י"ב -> י"ג -> י"ד)
+        const aGradeIndex = gradeOrder.indexOf(a.grade)
+        const bGradeIndex = gradeOrder.indexOf(b.grade)
+        
+        // If grade not found, put at the end
+        if (aGradeIndex === -1 && bGradeIndex === -1) {
+          // Both have unknown grades, sort by stream then last name
+          const aStream = parseInt(a.stream) || 999
+          const bStream = parseInt(b.stream) || 999
+          if (aStream !== bStream) {
+            return aStream - bStream
+          }
+          return (a.lastName || '').localeCompare(b.lastName || '', 'he')
+        }
+        if (aGradeIndex === -1) return 1
+        if (bGradeIndex === -1) return -1
+        
+        // Sort by grade index
+        if (aGradeIndex !== bGradeIndex) {
+          return aGradeIndex - bGradeIndex
+        }
+        
+        // 3. Same grade: sort by stream (1-8)
+        const aStream = parseInt(a.stream) || 999
+        const bStream = parseInt(b.stream) || 999
+        if (aStream !== bStream) {
+          return aStream - bStream
+        }
+        
+        // 4. Same grade and stream: sort by last name
+        return (a.lastName || '').localeCompare(b.lastName || '', 'he')
+      } else {
+        // Both are inactive: sort by cycle (newer cycles first) then by grade, stream, and last name
+        const aCycle = parseInt(a.cycle) || 0
+        const bCycle = parseInt(b.cycle) || 0
+        
+        if (aCycle !== bCycle) {
+          return bCycle - aCycle // Newer cycles first
+        }
+        
+        // Same cycle: sort by grade, then stream, then last name
+        const aGradeIndex = gradeOrder.indexOf(a.grade)
+        const bGradeIndex = gradeOrder.indexOf(b.grade)
+        
+        if (aGradeIndex !== -1 && bGradeIndex !== -1) {
+          if (aGradeIndex !== bGradeIndex) {
+            return aGradeIndex - bGradeIndex
+          }
+        } else if (aGradeIndex === -1 && bGradeIndex !== -1) {
+          return 1
+        } else if (aGradeIndex !== -1 && bGradeIndex === -1) {
+          return -1
+        }
+        
+        // Same grade (or both unknown): sort by stream
+        const aStream = parseInt(a.stream) || 999
+        const bStream = parseInt(b.stream) || 999
+        if (aStream !== bStream) {
+          return aStream - bStream
+        }
+        
+        // Same stream: sort by last name
+        return (a.lastName || '').localeCompare(b.lastName || '', 'he')
+      }
+    })
+  }
+
+
   if (processingCallback || authLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -386,7 +770,7 @@ function App() {
                 </svg>
               </div>
               <div>
-                <h1 className="text-lg font-bold text-white">רשימת לומדים</h1>
+                <h1 className="text-lg font-bold text-white">ניהול משאבים</h1>
               </div>
             </div>
             {authEnabled && (
@@ -420,16 +804,29 @@ function App() {
         </div>
       </nav>
 
-      {/* Main Content */}
+      {/* Main Content - Students */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="bg-white shadow-xl rounded-xl overflow-hidden border border-gray-100">
           <div className="bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-4">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-bold text-white">מרשם לומדים</h2>
+                <h2 className="text-lg font-bold text-white">רשימת לומדים</h2>
                 <p className="mt-1 text-xs text-blue-100">רשימת לומדים רשומים</p>
               </div>
               <div className="flex items-center gap-3">
+                <label className="px-3 py-1.5 bg-white/20 backdrop-blur-sm text-white rounded-lg hover:bg-white/30 transition-all text-sm font-medium flex items-center gap-1.5 cursor-pointer">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  </svg>
+                  {uploadingExcel ? 'מעלה...' : 'העלה ממשו"ב'}
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={handleUploadExcel}
+                    disabled={uploadingExcel}
+                    className="hidden"
+                  />
+                </label>
                 <button
                   onClick={() => setShowSearch(!showSearch)}
                   className="px-3 py-1.5 bg-white/20 backdrop-blur-sm text-white rounded-lg hover:bg-white/30 transition-all text-sm font-medium flex items-center gap-1.5"
@@ -595,36 +992,65 @@ function App() {
             </div>
           )}
 
+          {uploadResult && (
+            <div className="px-6 py-4 bg-green-50 border-r-4 border-green-400">
+              <p className="text-green-800 font-semibold mb-2">העלאה הושלמה בהצלחה!</p>
+              <div className="text-sm text-green-700 space-y-1">
+                <p>עובדו: {uploadResult.processed} תלמידים</p>
+                <p>נוצרו: {uploadResult.created} תלמידים חדשים</p>
+                <p>עודכנו: {uploadResult.updated} תלמידים</p>
+                <p>דולגו: {uploadResult.skipped} תלמידים (ללא שינויים)</p>
+                {uploadResult.errors && uploadResult.errors.length > 0 && (
+                  <div className="mt-2">
+                    <p className="font-semibold">שגיאות:</p>
+                    <ul className="list-disc list-inside">
+                      {uploadResult.errors.map((err, idx) => (
+                        <li key={idx}>{err}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={() => setUploadResult(null)}
+                className="mt-2 text-xs text-green-600 hover:text-green-800 underline"
+              >
+                סגור
+              </button>
+            </div>
+          )}
+
           {!loading && !error && (
+            <>
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
+              <table className="w-full divide-y divide-gray-200 table-auto">
                 <thead className="bg-gradient-to-r from-gray-50 to-gray-100">
                   <tr>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 tracking-wider border-b border-gray-200">
+                    <th className="px-3 py-3 text-right text-xs font-semibold text-gray-700 tracking-wider border-b border-gray-200 w-24">
                       ת.ז
                     </th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 tracking-wider border-b border-gray-200">
+                    <th className="px-3 py-3 text-right text-xs font-semibold text-gray-700 tracking-wider border-b border-gray-200 min-w-[120px]">
                       שם משפחה
                     </th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 tracking-wider border-b border-gray-200">
+                    <th className="px-3 py-3 text-right text-xs font-semibold text-gray-700 tracking-wider border-b border-gray-200 min-w-[100px]">
                       שם פרטי
                     </th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 tracking-wider border-b border-gray-200">
+                    <th className="px-3 py-3 text-right text-xs font-semibold text-gray-700 tracking-wider border-b border-gray-200 w-20">
                       כיתה
                     </th>
-                    <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 tracking-wider border-b border-gray-200">
+                    <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 tracking-wider border-b border-gray-200 w-16">
                       מקבילה
                     </th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 tracking-wider border-b border-gray-200">
+                    <th className="px-3 py-3 text-right text-xs font-semibold text-gray-700 tracking-wider border-b border-gray-200 w-20">
                       מין
                     </th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 tracking-wider border-b border-gray-200">
+                    <th className="px-3 py-3 text-right text-xs font-semibold text-gray-700 tracking-wider border-b border-gray-200 min-w-[150px]">
                       מגמה
                     </th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 tracking-wider border-b border-gray-200">
+                    <th className="px-3 py-3 text-right text-xs font-semibold text-gray-700 tracking-wider border-b border-gray-200 w-24">
                       סטטוס
                     </th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 tracking-wider border-b border-gray-200">
+                    <th className="px-3 py-3 text-right text-xs font-semibold text-gray-700 tracking-wider border-b border-gray-200 w-20">
                       מחזור
                     </th>
                   </tr>
@@ -643,38 +1069,82 @@ function App() {
                       </td>
                     </tr>
                   ) : (
-                    students.map((student, index) => (
+                    currentStudents.map((student, index) => {
+                      const cycleStatus = student.cycle ? getCycleStatus(student.cycle) : null
+                      const isActive = cycleStatus === 'active'
+                      
+                      return (
                       <tr 
                         key={student.id} 
                         onClick={() => handleViewHistory(student)}
                         className={`cursor-pointer transition-all hover:bg-blue-50 hover:shadow-sm ${
                           index % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
-                        }`}
+                        } ${!isActive ? 'opacity-60' : ''}`}
                       >
-                        <td className="px-4 py-3 whitespace-nowrap">
+                        <td className="px-3 py-3 whitespace-nowrap">
                           <span className="text-xs font-mono text-gray-700">{student.idNumber}</span>
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap">
+                        <td className="px-3 py-3">
                           <span className="text-xs font-semibold text-gray-900">{student.lastName}</span>
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap">
+                        <td className="px-3 py-3">
                           <span className="text-xs font-semibold text-gray-900">{student.firstName}</span>
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
-                            {student.grade}
-                          </span>
+                        <td className="px-3 py-3 whitespace-nowrap">
+                          <div className="flex flex-col gap-1">
+                            {(() => {
+                              const cycleStatus = getCycleStatus(student.cycle)
+                              
+                              // למחזור לא פעיל (עתידי או נגמר): לא מציגים כיתה כלל
+                              if (cycleStatus === 'future' || cycleStatus === 'ended') {
+                                return (
+                                  <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium border ${
+                                    cycleStatus === 'future' 
+                                      ? 'bg-blue-100 text-blue-700 border-blue-300'
+                                      : 'bg-gray-100 text-gray-600 border-gray-300'
+                                  }`}>
+                                    {getCycleDisplayText(student.cycle)}
+                                  </span>
+                                )
+                              }
+                              
+                              // למחזור פעיל בלבד: מציגים את הכיתה הרשומה
+                              return (
+                                <>
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+                                    {student.grade}
+                                  </span>
+                                  {(() => {
+                                    // מחזור פעיל: הצג כיתה צפויה אם שונה
+                                    const expectedGrade = getExpectedGradeForStudent(student)
+                                    const isMatching = isGradeMatchingCycle(student)
+                                    if (expectedGrade && !isMatching) {
+                                      return (
+                                        <span 
+                                          className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800 border border-yellow-300"
+                                          title={`כיתה צפויה לפי מחזור: ${expectedGrade}`}
+                                        >
+                                          {expectedGrade}
+                                        </span>
+                                      )
+                                    }
+                                    return null
+                                  })()}
+                                </>
+                              )
+                            })()}
+                          </div>
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap text-center">
+                        <td className="px-3 py-3 whitespace-nowrap text-center">
                           <span className="text-xs text-gray-700 font-medium">{student.stream}</span>
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap">
+                        <td className="px-3 py-3 whitespace-nowrap">
                           <span className="text-xs text-gray-700">{student.gender}</span>
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          <span className="text-xs text-gray-700">{student.track}</span>
+                        <td className="px-3 py-3">
+                          <span className="text-xs text-gray-700 truncate block max-w-[200px]" title={student.track}>{student.track || '-'}</span>
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap">
+                        <td className="px-3 py-3 whitespace-nowrap">
                           <span className={`px-2 py-0.5 inline-flex text-xs leading-4 font-semibold rounded-full ${
                             student.status === 'לומד' 
                               ? 'bg-green-100 text-green-800 border border-green-200' 
@@ -685,15 +1155,112 @@ function App() {
                             {student.status}
                           </span>
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap">
+                        <td className="px-3 py-3 whitespace-nowrap">
                           <span className="text-xs text-gray-700 font-medium">{student.cycle}</span>
                         </td>
                       </tr>
-                    ))
+                      )
+                    })
                   )}
                 </tbody>
               </table>
             </div>
+            
+            {/* Pagination Controls */}
+            {students.length > 0 && totalPages > 1 && (
+              <div className="px-6 py-4 border-t border-gray-200 bg-gray-50">
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+                  {/* Items per page selector */}
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-gray-600">תלמידים לעמוד:</label>
+                    <select
+                      value={itemsPerPage}
+                      onChange={(e) => {
+                        setItemsPerPage(Number(e.target.value))
+                        setCurrentPage(1)
+                      }}
+                      className="px-2 py-1 text-xs border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    >
+                      <option value={10}>10</option>
+                      <option value={20}>20</option>
+                      <option value={25}>25</option>
+                      <option value={50}>50</option>
+                      <option value={100}>100</option>
+                      <option value={200}>200</option>
+                    </select>
+                  </div>
+
+                  {/* Page info */}
+                  <div className="text-xs text-gray-600">
+                    מציג {startIndex + 1}-{Math.min(endIndex, students.length)} מתוך {students.length} תלמידים
+                  </div>
+
+                  {/* Pagination buttons */}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setCurrentPage(1)}
+                      disabled={currentPage === 1}
+                      className="px-2 py-1 text-xs border border-gray-300 rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 transition-colors"
+                    >
+                      ראשון
+                    </button>
+                    <button
+                      onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                      disabled={currentPage === 1}
+                      className="px-2 py-1 text-xs border border-gray-300 rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 transition-colors"
+                    >
+                      קודם
+                    </button>
+                    
+                    {/* Page numbers */}
+                    <div className="flex items-center gap-1">
+                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                        let pageNum
+                        if (totalPages <= 5) {
+                          pageNum = i + 1
+                        } else if (currentPage <= 3) {
+                          pageNum = i + 1
+                        } else if (currentPage >= totalPages - 2) {
+                          pageNum = totalPages - 4 + i
+                        } else {
+                          pageNum = currentPage - 2 + i
+                        }
+                        
+                        return (
+                          <button
+                            key={pageNum}
+                            onClick={() => setCurrentPage(pageNum)}
+                            className={`px-2 py-1 text-xs border rounded-md min-w-[32px] ${
+                              currentPage === pageNum
+                                ? 'bg-blue-600 text-white border-blue-600'
+                                : 'border-gray-300 hover:bg-gray-100'
+                            } transition-colors`}
+                          >
+                            {pageNum}
+                          </button>
+                        )
+                      })}
+                    </div>
+
+                    <button
+                      onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                      disabled={currentPage === totalPages}
+                      className="px-2 py-1 text-xs border border-gray-300 rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 transition-colors"
+                    >
+                      הבא
+                    </button>
+                    <button
+                      onClick={() => setCurrentPage(totalPages)}
+                      disabled={currentPage === totalPages}
+                      className="px-2 py-1 text-xs border border-gray-300 rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 transition-colors"
+                    >
+                      אחרון
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+            </>
           )}
         </div>
       </div>
@@ -727,7 +1294,17 @@ function App() {
                     onClick={() => {
                       setShowEditForm(!showEditForm)
                       if (!showEditForm && selectedStudent) {
-                        setEditFormData({ ...selectedStudent })
+                        const formData = { ...selectedStudent }
+                        // אם המחזור לא פעיל, אפס את הכיתה ותקן את הסטטוס
+                        const cycleStatus = formData.cycle ? getCycleStatus(formData.cycle) : null
+                        if (cycleStatus && cycleStatus !== 'active') {
+                          formData.grade = ''
+                          // אם הסטטוס הוא "לומד" למחזור לא פעיל, שנה אותו
+                          if (formData.status === 'לומד') {
+                            formData.status = cycleStatus === 'ended' ? 'סיים לימודים' : 'הפסיק לימודים'
+                          }
+                        }
+                        setEditFormData(formData)
                       }
                     }}
                     className="px-4 py-2 bg-white text-blue-700 rounded-lg hover:bg-blue-50 transition-all font-medium text-sm shadow-md hover:shadow-lg flex items-center gap-1.5"
@@ -761,7 +1338,17 @@ function App() {
                     type="button"
                     onClick={() => {
                       setShowEditForm(false)
-                      setEditFormData({ ...selectedStudent })
+                      const formData = { ...selectedStudent }
+                      // אם המחזור לא פעיל, אפס את הכיתה ותקן את הסטטוס
+                      const cycleStatus = formData.cycle ? getCycleStatus(formData.cycle) : null
+                      if (cycleStatus && cycleStatus !== 'active') {
+                        formData.grade = ''
+                        // אם הסטטוס הוא "לומד" למחזור לא פעיל, שנה אותו
+                        if (formData.status === 'לומד') {
+                          formData.status = cycleStatus === 'ended' ? 'סיים לימודים' : 'הפסיק לימודים'
+                        }
+                      }
+                      setEditFormData(formData)
                     }}
                     className="text-gray-400 hover:text-gray-600 transition-colors"
                   >
@@ -804,20 +1391,67 @@ function App() {
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-600 mb-1">כיתה</label>
-                      <select
-                        value={editFormData.grade || ''}
-                        onChange={(e) => setEditFormData({ ...editFormData, grade: e.target.value })}
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white"
-                        required
-                      >
-                        <option value="">בחר כיתה</option>
-                        <option value="ט'">ט'</option>
-                        <option value="י'">י'</option>
-                        <option value='י"א'>י"א</option>
-                        <option value='י"ב'>י"ב</option>
-                        <option value='י"ג'>י"ג</option>
-                        <option value='י"ד'>י"ד</option>
-                      </select>
+                      {(() => {
+                        const cycleStatus = editFormData.cycle ? getCycleStatus(editFormData.cycle) : null
+                        const isCycleActive = cycleStatus === 'active'
+                        
+                        // אם המחזור לא פעיל, לא מאפשרים בחירת כיתה
+                        if (cycleStatus && !isCycleActive) {
+                          return (
+                            <>
+                              <input
+                                type="text"
+                                value=""
+                                disabled
+                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md bg-gray-100 text-gray-500 cursor-not-allowed"
+                                placeholder={cycleStatus === 'future' ? 'מחזור עתידי - אין כיתה' : 'מחזור נגמר - אין כיתה'}
+                              />
+                              <p className="mt-1 text-xs text-gray-500">
+                                {cycleStatus === 'future' 
+                                  ? '⚠️ למחזור עתידי אין כיתה'
+                                  : '⚠️ למחזור נגמר אין כיתה'}
+                              </p>
+                            </>
+                          )
+                        }
+                        
+                        return (
+                          <select
+                            value={editFormData.grade || ''}
+                            onChange={(e) => {
+                              const newGrade = e.target.value
+                              const updatedData = { ...editFormData, grade: newGrade }
+                              
+                              // אם הכיתה היא פעילה (ט' - י"ד), חשב את המחזור
+                              if (newGrade && isActiveGrade(newGrade)) {
+                                const currentYear = getCurrentYear()
+                                const calculatedCycle = calculateCycleFromGrade(newGrade, currentYear)
+                                if (calculatedCycle) {
+                                  updatedData.cycle = calculatedCycle
+                                }
+                              }
+                              // אם הכיתה לא פעילה, לא משנים את המחזור (תלמיד שכבר סיים)
+                              
+                              // אם הסטטוס הוא "סיים לימודים" והכיתה החדשה לא י"ג או י"ד, אפס את הסטטוס
+                              if (updatedData.status === 'סיים לימודים' && newGrade !== 'י"ג' && newGrade !== 'י"ד') {
+                                updatedData.status = 'לומד'
+                              }
+                              
+                              setEditFormData(updatedData)
+                            }}
+                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                            required={isCycleActive}
+                          >
+                            <option value="">בחר כיתה</option>
+                            <option value="ט'">ט'</option>
+                            <option value="י'">י'</option>
+                            <option value='י"א'>י"א</option>
+                            <option value='י"ב'>י"ב</option>
+                            <option value='י"ג'>י"ג</option>
+                            <option value='י"ד'>י"ד</option>
+                          </select>
+                        )
+                      })()}
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-600 mb-1">מקבילה</label>
@@ -862,26 +1496,169 @@ function App() {
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-600 mb-1">סטטוס</label>
-                      <select
-                        value={editFormData.status || ''}
-                        onChange={(e) => setEditFormData({ ...editFormData, status: e.target.value })}
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white"
-                        required
-                      >
-                        <option value="לומד">לומד</option>
-                        <option value="סיים לימודים">סיים לימודים</option>
-                        <option value="הפסיק לימודים">הפסיק לימודים</option>
-                      </select>
+                      {(() => {
+                        const cycleStatus = editFormData.cycle ? getCycleStatus(editFormData.cycle) : null
+                        const isCycleActive = cycleStatus === 'active'
+                        
+                        return (
+                          <select
+                            value={editFormData.status || ''}
+                            onChange={(e) => {
+                              const newStatus = e.target.value
+                              setEditFormData({ ...editFormData, status: newStatus })
+                            }}
+                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                            required
+                          >
+                            {isCycleActive ? (
+                              // מחזור פעיל: כל הסטטוסים זמינים
+                              <>
+                                <option value="לומד">לומד</option>
+                                {(() => {
+                                  // "סיים לימודים" אפשרי רק לכיתות י"ג או י"ד
+                                  const grade = editFormData.grade
+                                  const canFinish = grade === 'י"ג' || grade === 'י"ד'
+                                  if (canFinish) {
+                                    return <option value="סיים לימודים">סיים לימודים</option>
+                                  }
+                                  return null
+                                })()}
+                                <option value="הפסיק לימודים">הפסיק לימודים</option>
+                              </>
+                            ) : (
+                              // מחזור לא פעיל: רק "סיים לימודים" או "הפסיק לימודים"
+                              <>
+                                <option value="סיים לימודים">סיים לימודים</option>
+                                <option value="הפסיק לימודים">הפסיק לימודים</option>
+                              </>
+                            )}
+                          </select>
+                        )
+                      })()}
+                      {(() => {
+                        const cycleStatus = editFormData.cycle ? getCycleStatus(editFormData.cycle) : null
+                        const isCycleActive = cycleStatus === 'active'
+                        
+                        if (!isCycleActive && editFormData.status === 'לומד') {
+                          return (
+                            <p className="mt-1 text-xs text-red-600">
+                              ⚠️ למחזור לא פעיל לא יכול להיות סטטוס "לומד"
+                            </p>
+                          )
+                        }
+                        
+                        // בדיקה נוספת: "סיים לימודים" אפשרי רק לכיתות י"ג או י"ד (אם מחזור פעיל)
+                        if (isCycleActive) {
+                          const grade = editFormData.grade
+                          const canFinish = grade === 'י"ג' || grade === 'י"ד'
+                          if (!canFinish && editFormData.status === 'סיים לימודים') {
+                            return (
+                              <p className="mt-1 text-xs text-red-600">
+                                ⚠️ סטטוס "סיים לימודים" אפשרי רק לכיתות י"ג או י"ד
+                              </p>
+                            )
+                          }
+                        }
+                        return null
+                      })()}
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-gray-600 mb-1">מחזור</label>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">
+                        מחזור
+                        {(() => {
+                          if (!editFormData.cycle) return null
+                          const cycleStatus = getCycleStatus(editFormData.cycle)
+                          const cycleDisplay = getCycleDisplayText(editFormData.cycle)
+                          
+                          if (cycleStatus === 'active') {
+                            const expectedGrade = calculateGradeFromCycle(editFormData.cycle)
+                            if (expectedGrade && expectedGrade !== editFormData.grade) {
+                              return (
+                                <span className="mr-2 text-yellow-600 text-xs">
+                                  (כיתה צפויה: {expectedGrade})
+                                </span>
+                              )
+                            }
+                          } else if (cycleStatus === 'ended') {
+                            return (
+                              <span className="mr-2 text-gray-600 text-xs">
+                                ({cycleDisplay})
+                              </span>
+                            )
+                          } else if (cycleStatus === 'future') {
+                            return (
+                              <span className="mr-2 text-blue-600 text-xs">
+                                ({cycleDisplay})
+                              </span>
+                            )
+                          }
+                          return null
+                        })()}
+                      </label>
                       <input
                         type="text"
                         value={editFormData.cycle || ''}
-                        onChange={(e) => setEditFormData({ ...editFormData, cycle: e.target.value })}
+                        onChange={(e) => {
+                          const newCycle = e.target.value
+                          const updatedData = { ...editFormData, cycle: newCycle }
+                          
+                          // אם המחזור הוא מספר תקין (4 ספרות), חשב את הכיתה
+                          const cycleNum = parseInt(newCycle)
+                          if (!isNaN(cycleNum) && newCycle.length === 4) {
+                            const cycleStatus = getCycleStatus(newCycle)
+                            
+                            // עדכן את הכיתה רק אם המחזור פעיל
+                            if (cycleStatus === 'active') {
+                              const calculatedGrade = calculateGradeFromCycle(newCycle)
+                              if (calculatedGrade && isActiveGrade(calculatedGrade)) {
+                                updatedData.grade = calculatedGrade
+                              }
+                            } else {
+                              // אם המחזור לא פעיל (עתידי או נגמר), אפס את הכיתה
+                              updatedData.grade = ''
+                              
+                              // אם הסטטוס הוא "לומד", שנה אותו ל"סיים לימודים" (למחזור נגמר) או "הפסיק לימודים"
+                              if (updatedData.status === 'לומד') {
+                                updatedData.status = cycleStatus === 'ended' ? 'סיים לימודים' : 'הפסיק לימודים'
+                              }
+                            }
+                          }
+                          
+                          setEditFormData(updatedData)
+                        }}
                         className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white"
                         required
+                        placeholder="שנה (למשל: 2024)"
                       />
+                      {(() => {
+                        if (!editFormData.cycle) return null
+                        const cycleStatus = getCycleStatus(editFormData.cycle)
+                        const cycleDisplay = getCycleDisplayText(editFormData.cycle)
+                        
+                        if (cycleStatus === 'active') {
+                          const expectedGrade = calculateGradeFromCycle(editFormData.cycle)
+                          if (expectedGrade && expectedGrade !== editFormData.grade) {
+                            return (
+                              <p className="mt-1 text-xs text-yellow-600">
+                                💡 הכיתה הצפויה לפי מחזור {editFormData.cycle} היא {expectedGrade}
+                              </p>
+                            )
+                          }
+                        } else if (cycleStatus === 'ended') {
+                          return (
+                            <p className="mt-1 text-xs text-gray-600">
+                              ⚠️ מחזור זה נגמר. התלמיד כבר סיים את כיתה י"ד.
+                            </p>
+                          )
+                        } else if (cycleStatus === 'future') {
+                          return (
+                            <p className="mt-1 text-xs text-blue-600">
+                              📅 {cycleDisplay}
+                            </p>
+                          )
+                        }
+                        return null
+                      })()}
                     </div>
                   </div>
                   <div className="flex gap-2 justify-end pt-3 border-t border-gray-200">
@@ -889,7 +1666,17 @@ function App() {
                       type="button"
                       onClick={() => {
                         setShowEditForm(false)
-                        setEditFormData({ ...selectedStudent })
+                        const formData = { ...selectedStudent }
+                        // אם המחזור לא פעיל, אפס את הכיתה ותקן את הסטטוס
+                        const cycleStatus = formData.cycle ? getCycleStatus(formData.cycle) : null
+                        if (cycleStatus && cycleStatus !== 'active') {
+                          formData.grade = ''
+                          // אם הסטטוס הוא "לומד" למחזור לא פעיל, שנה אותו
+                          if (formData.status === 'לומד') {
+                            formData.status = cycleStatus === 'ended' ? 'סיים לימודים' : 'הפסיק לימודים'
+                          }
+                        }
+                        setEditFormData(formData)
                       }}
                       className="px-4 py-1.5 text-sm text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors font-medium"
                     >

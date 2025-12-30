@@ -36,9 +36,13 @@ const config = CLIENT_ID && issuerBase && REDIRECT_URI ? {
   loadUserInfo: true,
   // For public clients, ensure no client_secret is sent
   // PKCE is enabled by default in oidc-client-ts for browser clients
-  automaticSilentRenew: false,
+  automaticSilentRenew: true,
+  // Renew token before it expires (default is 60 seconds before expiration)
+  silent_redirect_uri: REDIRECT_URI,
   // Ensure client_secret is not included (for public clients)
   extraTokenParams: {},
+  // Access token expiration time (in seconds) - default is 300 (5 minutes)
+  // This will be handled by automaticSilentRenew
 } : null;
 
 let userManager = null;
@@ -46,6 +50,26 @@ let userManager = null;
 export const initAuth = () => {
   if (config && CLIENT_ID) {
     userManager = new UserManager(config);
+    
+    // Set up event listeners for token renewal
+    if (userManager) {
+      // Listen for user loaded (after silent renew)
+      userManager.events.addUserLoaded((user) => {
+        console.log('User loaded (token renewed):', user ? 'Yes' : 'No');
+      });
+      
+      // Listen for silent renew errors
+      userManager.events.addSilentRenewError((error) => {
+        console.error('Silent renew error:', error);
+        // Don't log out on silent renew error - user can still use the app
+        // The token will be refreshed on next request or user action
+      });
+      
+      // Listen for user unloaded (logout)
+      userManager.events.addUserUnloaded(() => {
+        console.log('User unloaded');
+      });
+    }
   }
   return userManager;
 };
@@ -113,7 +137,24 @@ export const handleCallback = async () => {
 
 export const getAccessToken = async () => {
   try {
-    const user = await getUser();
+    const manager = getUserManager();
+    if (!manager) {
+      return null;
+    }
+    
+    // Get user - this will trigger silent renew if token is expired
+    let user = await getUser();
+    
+    // If user is expired, try to renew silently
+    if (user && user.expired) {
+      try {
+        user = await manager.signinSilent();
+      } catch (error) {
+        console.error('Silent renew failed:', error);
+        return null;
+      }
+    }
+    
     return user?.access_token || null;
   } catch (error) {
     console.error('Error getting access token:', error);

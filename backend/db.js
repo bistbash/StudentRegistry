@@ -36,7 +36,7 @@ async function initDatabase(retries = 5, delay = 2000) {
         id_number VARCHAR(20) UNIQUE NOT NULL,
         last_name VARCHAR(100) NOT NULL,
         first_name VARCHAR(100) NOT NULL,
-        grade VARCHAR(10) NOT NULL,
+        grade VARCHAR(10),
         stream VARCHAR(10) NOT NULL,
         gender VARCHAR(20) NOT NULL,
         track VARCHAR(100) NOT NULL,
@@ -46,6 +46,20 @@ async function initDatabase(retries = 5, delay = 2000) {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+      
+      // Alter existing table to allow NULL grade (for non-active cycles)
+      try {
+        await pool.query(`
+          ALTER TABLE students 
+          ALTER COLUMN grade DROP NOT NULL
+        `);
+        console.log('Updated grade column to allow NULL values');
+      } catch (error) {
+        // Column might already allow NULL or table doesn't exist yet
+        if (!error.message.includes('does not exist') && !error.message.includes('column') && !error.message.includes('already')) {
+          console.warn('Could not alter grade column:', error.message);
+        }
+      }
 
     // Create index on id_number for faster lookups
     await pool.query(`
@@ -76,6 +90,45 @@ async function initDatabase(retries = 5, delay = 2000) {
       CREATE INDEX IF NOT EXISTS idx_student_history_created_at ON student_history(created_at DESC)
     `);
 
+    // Create educational_teams table for managing educational teams
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS educational_teams (
+        id SERIAL PRIMARY KEY,
+        grade VARCHAR(10) NOT NULL,
+        stream VARCHAR(10) NOT NULL,
+        teacher_name VARCHAR(200) NOT NULL,
+        teacher_email VARCHAR(255),
+        role VARCHAR(100) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(grade, stream, teacher_email)
+      )
+    `);
+
+    // Create index on grade and stream for faster lookups
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_educational_teams_grade_stream ON educational_teams(grade, stream)
+    `);
+
+    // Create class_user_associations table for linking users with "makas" group to classes
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS class_user_associations (
+        id SERIAL PRIMARY KEY,
+        grade VARCHAR(10) NOT NULL,
+        stream VARCHAR(10) NOT NULL,
+        user_email VARCHAR(255) NOT NULL,
+        user_name VARCHAR(200),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(grade, stream, user_email)
+      )
+    `);
+
+    // Create index on grade and stream for faster lookups
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_class_user_associations_grade_stream ON class_user_associations(grade, stream)
+    `);
+
     // Check if table is empty and insert sample data
     const result = await pool.query('SELECT COUNT(*) FROM students');
     const count = parseInt(result.rows[0].count);
@@ -92,28 +145,28 @@ async function initDatabase(retries = 5, delay = 2000) {
         RETURNING id, created_at, first_name, last_name, id_number
       `);
       
-      // Add "start_studies" history entry for each student
+      // Add "created" history entry for each student
       for (const student of insertResult.rows) {
         await pool.query(`
           INSERT INTO student_history (student_id, change_type, change_description, created_at)
           VALUES ($1, $2, $3, $4)
         `, [
           student.id,
-          'start_studies',
-          `התחלת לימודים - ${student.first_name} ${student.last_name} (ת.ז: ${student.id_number})`,
+          'created',
+          `נוצר תלמיד חדש: ${student.first_name} ${student.last_name} (ת.ז: ${student.id_number})`,
           student.created_at
         ]);
       }
       
       console.log('Sample data inserted successfully');
     } else {
-      // Add "start_studies" history entry for existing students that don't have it
+      // Add "created" history entry for existing students that don't have it
       const existingStudents = await pool.query(`
         SELECT s.id, s.created_at, s.first_name, s.last_name, s.id_number
         FROM students s
         WHERE NOT EXISTS (
           SELECT 1 FROM student_history sh 
-          WHERE sh.student_id = s.id AND sh.change_type = 'start_studies'
+          WHERE sh.student_id = s.id AND sh.change_type = 'created'
         )
       `);
       
@@ -123,14 +176,14 @@ async function initDatabase(retries = 5, delay = 2000) {
           VALUES ($1, $2, $3, $4)
         `, [
           student.id,
-          'start_studies',
-          `התחלת לימודים - ${student.first_name} ${student.last_name} (ת.ז: ${student.id_number})`,
+          'created',
+          `נוצר תלמיד חדש: ${student.first_name} ${student.last_name} (ת.ז: ${student.id_number})`,
           student.created_at
         ]);
       }
       
       if (existingStudents.rows.length > 0) {
-        console.log(`Added start_studies history for ${existingStudents.rows.length} existing students`);
+        console.log(`Added created history for ${existingStudents.rows.length} existing students`);
       }
     }
 
@@ -294,6 +347,9 @@ const StudentModel = {
   // Create new student
   async create(studentData, userId = null, location = null) {
     try {
+      // Allow empty grade for non-active cycles (convert empty string to NULL)
+      const gradeValue = studentData.grade && studentData.grade.trim() !== '' ? studentData.grade : null;
+      
       const result = await pool.query(`
         INSERT INTO students (id_number, last_name, first_name, grade, stream, gender, track, status, cycle)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -314,7 +370,7 @@ const StudentModel = {
         studentData.idNumber,
         studentData.lastName,
         studentData.firstName,
-        studentData.grade,
+        gradeValue,
         studentData.stream,
         studentData.gender,
         studentData.track,
@@ -324,27 +380,7 @@ const StudentModel = {
       
       const student = result.rows[0];
       
-      // Get the created_at timestamp for start date
-      const studentWithDate = await pool.query(`
-        SELECT created_at FROM students WHERE id = $1
-      `, [student.id]);
-      
-      const startDate = studentWithDate.rows[0].created_at;
-      
-      // Log start of studies in history with the creation date
-      await pool.query(`
-        INSERT INTO student_history (student_id, change_type, change_description, location, changed_by, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6)
-      `, [
-        student.id,
-        'start_studies',
-        `התחלת לימודים - ${studentData.firstName} ${studentData.lastName} (ת.ז: ${studentData.idNumber})`,
-        location,
-        userId,
-        startDate
-      ]);
-      
-      // Also log creation
+      // Log creation
       await pool.query(`
         INSERT INTO student_history (student_id, change_type, change_description, location, changed_by)
         VALUES ($1, $2, $3, $4, $5)
@@ -371,6 +407,9 @@ const StudentModel = {
       if (!oldStudent) {
         return null;
       }
+
+      // Allow empty grade for non-active cycles (convert empty string to NULL)
+      const gradeValue = studentData.grade && studentData.grade.trim() !== '' ? studentData.grade : null;
 
       const result = await pool.query(`
         UPDATE students
@@ -403,7 +442,7 @@ const StudentModel = {
         studentData.idNumber,
         studentData.lastName,
         studentData.firstName,
-        studentData.grade,
+        gradeValue,
         studentData.stream,
         studentData.gender,
         studentData.track,
@@ -536,9 +575,260 @@ const StudentModel = {
   }
 };
 
+// Educational Teams Model
+const EducationalTeamModel = {
+  // Get all teams
+  async getAll() {
+    try {
+      const result = await pool.query(`
+        SELECT 
+          id,
+          grade,
+          stream,
+          teacher_name as "teacherName",
+          teacher_email as "teacherEmail",
+          role,
+          created_at as "createdAt",
+          updated_at as "updatedAt"
+        FROM educational_teams
+        ORDER BY grade, stream, teacher_name
+      `);
+      return result.rows;
+    } catch (error) {
+      console.error('Error fetching all educational teams:', error);
+      throw error;
+    }
+  },
+
+  // Get teams by grade and stream
+  async getByGradeAndStream(grade, stream) {
+    try {
+      const result = await pool.query(`
+        SELECT 
+          id,
+          grade,
+          stream,
+          teacher_name as "teacherName",
+          teacher_email as "teacherEmail",
+          role,
+          created_at as "createdAt",
+          updated_at as "updatedAt"
+        FROM educational_teams
+        WHERE grade = $1 AND stream = $2
+        ORDER BY teacher_name
+      `, [grade, stream]);
+      return result.rows;
+    } catch (error) {
+      console.error('Error fetching educational teams:', error);
+      throw error;
+    }
+  },
+
+  // Create new team member
+  async create(teamData) {
+    try {
+      const result = await pool.query(`
+        INSERT INTO educational_teams (grade, stream, teacher_name, teacher_email, role)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING 
+          id,
+          grade,
+          stream,
+          teacher_name as "teacherName",
+          teacher_email as "teacherEmail",
+          role,
+          created_at as "createdAt",
+          updated_at as "updatedAt"
+      `, [
+        teamData.grade,
+        teamData.stream,
+        teamData.teacherName,
+        teamData.teacherEmail || null,
+        teamData.role
+      ]);
+      return result.rows[0];
+    } catch (error) {
+      console.error('Error creating educational team member:', error);
+      if (error.code === '23505') { // Unique violation
+        throw new Error('מורה זה כבר קיים בכיתה ומקבילה זו');
+      }
+      throw error;
+    }
+  },
+
+  // Update team member
+  async update(id, teamData) {
+    try {
+      const result = await pool.query(`
+        UPDATE educational_teams
+        SET 
+          grade = $1,
+          stream = $2,
+          teacher_name = $3,
+          teacher_email = $4,
+          role = $5,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = $6
+        RETURNING 
+          id,
+          grade,
+          stream,
+          teacher_name as "teacherName",
+          teacher_email as "teacherEmail",
+          role,
+          created_at as "createdAt",
+          updated_at as "updatedAt"
+      `, [
+        teamData.grade,
+        teamData.stream,
+        teamData.teacherName,
+        teamData.teacherEmail || null,
+        teamData.role,
+        id
+      ]);
+      return result.rows[0];
+    } catch (error) {
+      console.error('Error updating educational team member:', error);
+      if (error.code === '23505') { // Unique violation
+        throw new Error('מורה זה כבר קיים בכיתה ומקבילה זו');
+      }
+      throw error;
+    }
+  },
+
+  // Delete team member
+  async delete(id) {
+    try {
+      const result = await pool.query('DELETE FROM educational_teams WHERE id = $1 RETURNING id', [id]);
+      return !!result.rows[0];
+    } catch (error) {
+      console.error('Error deleting educational team member:', error);
+      throw error;
+    }
+  }
+};
+
+// Class Statistics Model
+const ClassModel = {
+  // Get all classes with student count
+  async getClassesWithStudentCount() {
+    try {
+      const result = await pool.query(`
+        SELECT 
+          grade,
+          stream,
+          COUNT(*) as student_count
+        FROM students
+        GROUP BY grade, stream
+        ORDER BY grade, stream
+      `);
+      return result.rows.map(row => ({
+        grade: row.grade,
+        stream: row.stream,
+        studentCount: parseInt(row.student_count)
+      }));
+    } catch (error) {
+      console.error('Error fetching classes with student count:', error);
+      throw error;
+    }
+  }
+};
+
+// Class User Associations Model
+const ClassUserAssociationModel = {
+  // Get all associations
+  async getAll() {
+    try {
+      const result = await pool.query(`
+        SELECT 
+          id,
+          grade,
+          stream,
+          user_email as "userEmail",
+          user_name as "userName",
+          created_at as "createdAt",
+          updated_at as "updatedAt"
+        FROM class_user_associations
+        ORDER BY grade, stream, user_name
+      `);
+      return result.rows;
+    } catch (error) {
+      console.error('Error fetching class user associations:', error);
+      throw error;
+    }
+  },
+
+  // Get associations by grade and stream
+  async getByGradeAndStream(grade, stream) {
+    try {
+      const result = await pool.query(`
+        SELECT 
+          id,
+          grade,
+          stream,
+          user_email as "userEmail",
+          user_name as "userName",
+          created_at as "createdAt",
+          updated_at as "updatedAt"
+        FROM class_user_associations
+        WHERE grade = $1 AND stream = $2
+        ORDER BY user_name
+      `, [grade, stream]);
+      return result.rows;
+    } catch (error) {
+      console.error('Error fetching class user associations:', error);
+      throw error;
+    }
+  },
+
+  // Create new association
+  async create(associationData) {
+    try {
+      const result = await pool.query(`
+        INSERT INTO class_user_associations (grade, stream, user_email, user_name)
+        VALUES ($1, $2, $3, $4)
+        RETURNING 
+          id,
+          grade,
+          stream,
+          user_email as "userEmail",
+          user_name as "userName",
+          created_at as "createdAt",
+          updated_at as "updatedAt"
+      `, [
+        associationData.grade,
+        associationData.stream,
+        associationData.userEmail,
+        associationData.userName || null
+      ]);
+      return result.rows[0];
+    } catch (error) {
+      console.error('Error creating class user association:', error);
+      if (error.code === '23505') { // Unique violation
+        throw new Error('משתמש זה כבר משויך לכיתה ומקבילה זו');
+      }
+      throw error;
+    }
+  },
+
+  // Delete association
+  async delete(id) {
+    try {
+      const result = await pool.query('DELETE FROM class_user_associations WHERE id = $1 RETURNING id', [id]);
+      return !!result.rows[0];
+    } catch (error) {
+      console.error('Error deleting class user association:', error);
+      throw error;
+    }
+  }
+};
+
 module.exports = {
   pool,
   initDatabase,
-  StudentModel
+  StudentModel,
+  EducationalTeamModel,
+  ClassModel,
+  ClassUserAssociationModel
 };
 
