@@ -995,6 +995,149 @@ studentRoutes.post('/upload-excel', upload.single('file'), async (req, res) => {
   }
 });
 
+// Upload pasted data from Excel
+studentRoutes.post('/upload-pasted', async (req, res) => {
+  try {
+    const userId = req.user?.email || req.user?.sub || req.user?.name || 'משו"ב';
+    const location = 'העלאה ממשו"ב (הדבקה)';
+    const { students: studentsData } = req.body;
+
+    if (!studentsData || !Array.isArray(studentsData) || studentsData.length === 0) {
+      return res.status(400).json({ error: 'לא הועברו נתוני תלמידים' });
+    }
+
+    const results = {
+      processed: 0,
+      updated: 0,
+      created: 0,
+      skipped: 0,
+      errors: []
+    };
+
+    const gradeOrder = ["ט'", "י'", 'י"א', 'י"ב', 'י"ג', 'י"ד'];
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const month = now.getMonth() + 1;
+    const academicYear = month >= 9 ? currentYear : currentYear - 1;
+
+    for (const studentData of studentsData) {
+      try {
+        // Skip empty rows
+        if (!studentData.idNumber || !studentData.lastName || !studentData.firstName) {
+          continue;
+        }
+
+        results.processed++;
+
+        // Find existing student by ID number
+        const existingStudents = await StudentModel.search({ idNumber: studentData.idNumber });
+        const existingStudent = existingStudents.length > 0 ? existingStudents[0] : null;
+
+        if (existingStudent) {
+          // Always recalculate cycle from grade
+          let cycle = existingStudent.cycle;
+          let gradeIndex = gradeOrder.indexOf(studentData.grade);
+          if (gradeIndex === -1) {
+            const gradeWithoutQuotes = studentData.grade.replace(/"/g, '').replace(/'/g, '');
+            gradeIndex = gradeOrder.findIndex(g => g.replace(/"/g, '').replace(/'/g, '') === gradeWithoutQuotes);
+          }
+          
+          if (gradeIndex !== -1) {
+            const calculatedCycle = academicYear - gradeIndex;
+            if (calculatedCycle >= 2000 && calculatedCycle <= academicYear + 1) {
+              cycle = String(calculatedCycle);
+            }
+          }
+
+          // Check if anything changed
+          const changes = {};
+          const fieldsToCheck = [
+            { key: 'lastName', name: 'שם משפחה' },
+            { key: 'firstName', name: 'שם פרטי' },
+            { key: 'grade', name: 'כיתה' },
+            { key: 'stream', name: 'מקבילה' },
+            { key: 'gender', name: 'מין' },
+            { key: 'track', name: 'מגמה' },
+            { key: 'cycle', name: 'מחזור' }
+          ];
+
+          let hasChanges = false;
+          for (const field of fieldsToCheck) {
+            const oldValue = existingStudent[field.key] || '';
+            const newValue = field.key === 'cycle' ? cycle : (studentData[field.key] || '');
+            if (oldValue !== newValue) {
+              changes[field.key] = { old: oldValue, new: newValue, name: field.name };
+              hasChanges = true;
+            }
+          }
+
+          if (hasChanges) {
+            const updateData = {
+              idNumber: studentData.idNumber,
+              lastName: studentData.lastName,
+              firstName: studentData.firstName,
+              grade: studentData.grade,
+              stream: studentData.stream,
+              gender: studentData.gender,
+              track: studentData.track,
+              status: existingStudent.status,
+              cycle: cycle
+            };
+
+            await StudentModel.update(existingStudent.id, updateData, userId, location);
+            results.updated++;
+          } else {
+            results.skipped++;
+          }
+        } else {
+          // New student - calculate cycle from grade
+          let cycle = null;
+          let gradeIndex = gradeOrder.indexOf(studentData.grade);
+          if (gradeIndex === -1) {
+            const gradeWithoutQuotes = studentData.grade.replace(/"/g, '').replace(/'/g, '');
+            gradeIndex = gradeOrder.findIndex(g => g.replace(/"/g, '').replace(/'/g, '') === gradeWithoutQuotes);
+          }
+          
+          if (gradeIndex !== -1) {
+            cycle = academicYear - gradeIndex;
+            if (cycle < 2000 || cycle > academicYear + 1) {
+              cycle = null;
+            }
+          }
+          
+          if (!cycle) {
+            cycle = academicYear;
+          }
+
+          const newStudentData = {
+            ...studentData,
+            status: 'לומד',
+            cycle: String(cycle)
+          };
+
+          await StudentModel.create(newStudentData, userId, location);
+          results.created++;
+        }
+      } catch (error) {
+        console.error(`Error processing student ${studentData.idNumber}:`, error);
+        results.errors.push(`ת.ז ${studentData.idNumber}: ${error.message}`);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'נתונים עובדו בהצלחה',
+      results: results
+    });
+  } catch (error) {
+    console.error('Error processing pasted data:', error);
+    res.status(500).json({ 
+      error: 'שגיאה בעיבוד נתונים מודבקים',
+      details: error.message 
+    });
+  }
+});
+
 // Educational Teams routes - only for superusers
 const educationalTeamRoutes = express.Router();
 

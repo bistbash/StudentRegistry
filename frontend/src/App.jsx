@@ -36,6 +36,9 @@ function App() {
   const [showSearch, setShowSearch] = useState(false)
   const [uploadingExcel, setUploadingExcel] = useState(false)
   const [uploadResult, setUploadResult] = useState(null)
+  const [showUploadModal, setShowUploadModal] = useState(false)
+  const [uploadMode, setUploadMode] = useState('file') // 'file' or 'paste'
+  const [pastedData, setPastedData] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage, setItemsPerPage] = useState(25)
   const [searchParams, setSearchParams] = useState({
@@ -277,8 +280,7 @@ function App() {
     setCurrentPage(1)
   }, [students.length])
 
-  const handleUploadExcel = async (e) => {
-    const file = e.target.files?.[0]
+  const handleUploadExcel = async (file) => {
     if (!file) return
 
     // Check file type
@@ -324,11 +326,169 @@ function App() {
       // Refresh students list
       await fetchStudents()
       
-      // Clear file input
-      e.target.value = ''
+      // Close modal
+      setShowUploadModal(false)
     } catch (err) {
       setError(err.message || 'שגיאה בהעלאת קובץ אקסל')
       console.error('Error uploading Excel:', err)
+    } finally {
+      setUploadingExcel(false)
+    }
+  }
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      handleUploadExcel(file)
+    }
+  }
+
+  const handlePasteExcel = async () => {
+    if (!pastedData.trim()) {
+      setError('אנא הדבק נתונים מאקסל')
+      return
+    }
+
+    try {
+      setUploadingExcel(true)
+      setError(null)
+      setUploadResult(null)
+
+      // Parse pasted data (assuming tab-separated values like Excel copy)
+      const lines = pastedData.trim().split('\n')
+      if (lines.length < 3) {
+        throw new Error('נתונים לא תקינים. יש להדביק לפחות 3 שורות (כותרת + 2 שורות נתונים)')
+      }
+
+      // Find header row (should contain: ת.ז, שם משפחה, שם פרטי, כיתה, מקבילה, מין, מגמה)
+      let headerRowIndex = -1
+      const requiredHeaders = ['ת.ז', 'שם משפחה', 'שם פרטי', 'כיתה', 'מקבילה', 'מין', 'מגמה']
+      
+      for (let i = 0; i < Math.min(5, lines.length); i++) {
+        const headers = lines[i].split('\t')
+        const hasAllHeaders = requiredHeaders.every(h => 
+          headers.some(header => header.trim().includes(h))
+        )
+        if (hasAllHeaders) {
+          headerRowIndex = i
+          break
+        }
+      }
+
+      if (headerRowIndex === -1) {
+        throw new Error('לא נמצאו כותרות תקינות. אנא ודא שהנתונים כוללים: ת.ז, שם משפחה, שם פרטי, כיתה, מקבילה, מין, מגמה')
+      }
+
+      // Map headers
+      const headerRow = lines[headerRowIndex].split('\t')
+      const headerMap = {}
+      headerRow.forEach((header, index) => {
+        const headerStr = header.trim()
+        if (headerStr.includes('ת.ז') || headerStr.includes('תז')) {
+          headerMap.idNumber = index
+        } else if (headerStr.includes('שם משפחה')) {
+          headerMap.lastName = index
+        } else if (headerStr.includes('שם פרטי')) {
+          headerMap.firstName = index
+        } else if (headerStr.includes('כיתה')) {
+          headerMap.grade = index
+        } else if (headerStr.includes('מקבילה')) {
+          headerMap.stream = index
+        } else if (headerStr.includes('מין')) {
+          headerMap.gender = index
+        } else if (headerStr.includes('מגמה')) {
+          headerMap.track = index
+        }
+      })
+
+      // Validate headers
+      const requiredHeadersKeys = ['idNumber', 'lastName', 'firstName', 'grade', 'stream', 'gender', 'track']
+      const missingHeaders = requiredHeadersKeys.filter(h => headerMap[h] === undefined)
+      if (missingHeaders.length > 0) {
+        throw new Error(`חסרות כותרות: ${missingHeaders.join(', ')}`)
+      }
+
+      // Process data rows
+      const studentsData = []
+      for (let i = headerRowIndex + 1; i < lines.length; i++) {
+        const row = lines[i].split('\t')
+        if (row.length === 0 || !row[headerMap.idNumber]?.trim()) continue
+
+        // Normalize grade
+        let rawGrade = (row[headerMap.grade] || '').trim()
+        const gradeMap = {
+          'ט': "ט'",
+          'י': "י'",
+          'יא': 'י"א',
+          'יב': 'י"ב',
+          'יג': 'י"ג',
+          'יד': 'י"ד'
+        }
+        const normalizedGrade = gradeMap[rawGrade] || rawGrade
+
+        // Normalize gender
+        let rawGender = (row[headerMap.gender] || '').trim()
+        const genderMap = {
+          'ז': 'זכר',
+          'נ': 'נקבה',
+          'זכר': 'זכר',
+          'נקבה': 'נקבה'
+        }
+        const normalizedGender = genderMap[rawGender] || rawGender
+
+        studentsData.push({
+          idNumber: (row[headerMap.idNumber] || '').trim(),
+          lastName: (row[headerMap.lastName] || '').trim(),
+          firstName: (row[headerMap.firstName] || '').trim(),
+          grade: normalizedGrade,
+          stream: (row[headerMap.stream] || '').trim(),
+          gender: normalizedGender,
+          track: (row[headerMap.track] || '').trim()
+        })
+      }
+
+      if (studentsData.length === 0) {
+        throw new Error('לא נמצאו נתוני תלמידים להעלאה')
+      }
+
+      // Send to backend
+      const headers = await getAuthHeaders()
+      headers['Content-Type'] = 'application/json'
+
+      const response = await fetch(`${API_URL}/api/students/upload-pasted`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ students: studentsData })
+      })
+
+      if (response.status === 401) {
+        setError('ההרשאה פגה. אנא התחבר מחדש.')
+        return
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        let errorData
+        try {
+          errorData = JSON.parse(errorText)
+        } catch {
+          errorData = { error: errorText || `שגיאה ${response.status}` }
+        }
+        throw new Error(errorData.error || 'שגיאה בהעלאת הנתונים')
+      }
+
+      const result = await response.json()
+      setUploadResult(result.results)
+      
+      // Refresh students list
+      await fetchStudents()
+      
+      // Close modal
+      setShowUploadModal(false)
+      setPastedData('')
+    } catch (err) {
+      setError(err.message || 'שגיאה בהעלאת נתונים מודבקים')
+      console.error('Error uploading pasted data:', err)
     } finally {
       setUploadingExcel(false)
     }
@@ -814,19 +974,15 @@ function App() {
                 <p className="mt-1 text-xs text-blue-100">רשימת לומדים רשומים</p>
               </div>
               <div className="flex items-center gap-3">
-                <label className="px-3 py-1.5 bg-white/20 backdrop-blur-sm text-white rounded-lg hover:bg-white/30 transition-all text-sm font-medium flex items-center gap-1.5 cursor-pointer">
+                <button
+                  onClick={() => setShowUploadModal(true)}
+                  className="px-3 py-1.5 bg-white/20 backdrop-blur-sm text-white rounded-lg hover:bg-white/30 transition-all text-sm font-medium flex items-center gap-1.5"
+                >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                   </svg>
-                  {uploadingExcel ? 'מעלה...' : 'העלה ממשו"ב'}
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls"
-                    onChange={handleUploadExcel}
-                    disabled={uploadingExcel}
-                    className="hidden"
-                  />
-                </label>
+                  העלה ממשו"ב
+                </button>
                 <button
                   onClick={() => setShowSearch(!showSearch)}
                   className="px-3 py-1.5 bg-white/20 backdrop-blur-sm text-white rounded-lg hover:bg-white/30 transition-all text-sm font-medium flex items-center gap-1.5"
@@ -1264,6 +1420,125 @@ function App() {
           )}
         </div>
       </div>
+
+      {/* Upload Modal */}
+      {showUploadModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-blue-600 to-indigo-600">
+              <div className="flex justify-between items-center">
+                <h2 className="text-lg font-bold text-white">העלאת תלמידים ממשו"ב</h2>
+                <button
+                  onClick={() => {
+                    setShowUploadModal(false)
+                    setPastedData('')
+                    setUploadMode('file')
+                  }}
+                  className="text-white hover:text-gray-200 transition-colors"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="px-6 py-4 flex-1 overflow-y-auto">
+              {/* Mode Selection */}
+              <div className="mb-6">
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setUploadMode('file')}
+                    className={`flex-1 px-4 py-3 rounded-lg border-2 transition-all ${
+                      uploadMode === 'file'
+                        ? 'border-blue-500 bg-blue-50 text-blue-700'
+                        : 'border-gray-300 bg-white text-gray-700 hover:border-gray-400'
+                    }`}
+                  >
+                    <div className="flex items-center justify-center gap-2">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                      </svg>
+                      <span className="font-medium">העלאת קובץ</span>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => setUploadMode('paste')}
+                    className={`flex-1 px-4 py-3 rounded-lg border-2 transition-all ${
+                      uploadMode === 'paste'
+                        ? 'border-blue-500 bg-blue-50 text-blue-700'
+                        : 'border-gray-300 bg-white text-gray-700 hover:border-gray-400'
+                    }`}
+                  >
+                    <div className="flex items-center justify-center gap-2">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                      </svg>
+                      <span className="font-medium">הדבקה מאקסל</span>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              {/* File Upload Mode */}
+              {uploadMode === 'file' && (
+                <div className="space-y-4">
+                  <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-400 transition-colors">
+                    <label className="cursor-pointer">
+                      <div className="flex flex-col items-center gap-3">
+                        <svg className="w-12 h-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                        </svg>
+                        <div>
+                          <p className="text-sm font-medium text-gray-700">לחץ לבחירת קובץ או גרור לכאן</p>
+                          <p className="text-xs text-gray-500 mt-1">קבצי אקסל (.xlsx, .xls)</p>
+                        </div>
+                      </div>
+                      <input
+                        type="file"
+                        accept=".xlsx,.xls"
+                        onChange={handleFileSelect}
+                        disabled={uploadingExcel}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              {/* Paste Mode */}
+              {uploadMode === 'paste' && (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      הדבק נתונים מאקסל (העתק את הטבלה מאקסל והדבק כאן)
+                    </label>
+                    <textarea
+                      value={pastedData}
+                      onChange={(e) => setPastedData(e.target.value)}
+                      placeholder="הדבק כאן את הנתונים מהאקסל...&#10;הכותרות צריכות להיות: ת.ז, שם משפחה, שם פרטי, כיתה, מקבילה, מין, מגמה"
+                      className="w-full h-64 px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
+                      disabled={uploadingExcel}
+                    />
+                    <p className="mt-2 text-xs text-gray-500">
+                      💡 העתק את הטבלה מאקסל (כולל כותרות) והדבק כאן. הנתונים צריכים להיות מופרדים בטאבים.
+                    </p>
+                  </div>
+                  <button
+                    onClick={handlePasteExcel}
+                    disabled={uploadingExcel || !pastedData.trim()}
+                    className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {uploadingExcel ? 'מעלה...' : 'העלה נתונים'}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Student Card Modal */}
       {showHistoryModal && selectedStudent && (
