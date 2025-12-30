@@ -424,6 +424,102 @@ curl -X DELETE http://localhost:3001/api/students/all \
 
 ---
 
+### Get Status Summary (סיכום נשירות)
+```
+GET /api/students/status-summary
+```
+**Authentication:** נדרש אם מופעל
+
+**Query Parameters:**
+- `startDate` - תאריך התחלה (YYYY-MM-DD) - **חובה**
+- `endDate` - תאריך סיום (YYYY-MM-DD) - **חובה**
+- `grade` - סינון לפי כיתה (אופציונלי)
+- `cycle` - סינון לפי מחזור (אופציונלי)
+
+**Response:**
+```json
+{
+  "success": true,
+  "startDate": "2024-01-01",
+  "endDate": "2024-12-31",
+  "filters": {
+    "grade": null,
+    "cycle": null
+  },
+  "summary": [
+    {
+      "date": "2024-03-15",
+      "grade": "י'",
+      "cycle": "2024",
+      "oldStatus": "לומד",
+      "newStatus": "הפסיק לימודים",
+      "count": "5"
+    }
+  ]
+}
+```
+
+**Example:**
+```bash
+curl -X GET "http://localhost:3001/api/students/status-summary?startDate=2024-01-01&endDate=2024-12-31&grade=י'" \
+  -H "Authorization: Bearer <token>"
+```
+
+**הסבר:** מחזיר סיכום של כל שינויי הסטטוס בתאריכים שבין `startDate` ל-`endDate`, מקובץ לפי תאריך, כיתה ומחזור. שימושי לניתוח נשירות.
+
+---
+
+### Get Status At Date (סטטוס תלמידים בתאריך מסוים)
+```
+GET /api/students/status-at-date
+```
+**Authentication:** נדרש אם מופעל
+
+**Query Parameters:**
+- `date` - תאריך (YYYY-MM-DD) - **חובה**
+- `grade` - סינון לפי כיתה (אופציונלי)
+- `cycle` - סינון לפי מחזור (אופציונלי)
+
+**Response:**
+```json
+{
+  "success": true,
+  "date": "2024-03-15",
+  "filters": {
+    "grade": null,
+    "cycle": null
+  },
+  "totalStudents": 150,
+  "statusCounts": {
+    "לומד": 140,
+    "הפסיק לימודים": 8,
+    "סיים לימודים": 2
+  },
+  "students": [
+    {
+      "id": 1,
+      "idNumber": "123456789",
+      "lastName": "כהן",
+      "firstName": "דוד",
+      "grade": "י'",
+      "cycle": "2024",
+      "statusAtDate": "לומד",
+      "statusChangedAt": "2024-01-15T10:30:00.000Z"
+    }
+  ]
+}
+```
+
+**Example:**
+```bash
+curl -X GET "http://localhost:3001/api/students/status-at-date?date=2024-03-15&grade=י'" \
+  -H "Authorization: Bearer <token>"
+```
+
+**הסבר:** מחזיר את הסטטוס של כל התלמידים שהיו קיימים בתאריך המבוקש, כולל סיכום לפי סטטוס. שימושי לבדיקת מצב התלמידים בתאריך מסוים.
+
+---
+
 ## Authentik User Management Endpoints
 
 **הערה:** כל ה-endpoints הבאים דורשים הרשאות superuser ומשתמשים ב-service account כדי לבצע פעולות ב-Authentik API.

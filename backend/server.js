@@ -1138,6 +1138,97 @@ studentRoutes.post('/upload-pasted', async (req, res) => {
   }
 });
 
+// Get status summary (for dropout tracking)
+studentRoutes.get('/status-summary', async (req, res) => {
+  try {
+    const { startDate, endDate, grade, cycle } = req.query;
+    
+    if (!startDate || !endDate) {
+      return res.status(400).json({ 
+        error: 'נדרשים תאריכי התחלה וסיום (startDate, endDate)' 
+      });
+    }
+    
+    // Validate date format (YYYY-MM-DD)
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(startDate) || !dateRegex.test(endDate)) {
+      return res.status(400).json({ 
+        error: 'פורמט תאריך לא תקין. השתמש בפורמט YYYY-MM-DD' 
+      });
+    }
+    
+    const summary = await StudentModel.getStatusSummary(
+      startDate,
+      endDate + ' 23:59:59', // Include full end date
+      grade || null,
+      cycle || null
+    );
+    
+    res.json({
+      success: true,
+      startDate,
+      endDate,
+      filters: { grade: grade || null, cycle: cycle || null },
+      summary
+    });
+  } catch (error) {
+    console.error('Error fetching status summary:', error);
+    res.status(500).json({ 
+      error: 'שגיאה בטעינת סיכום סטטוסים',
+      details: error.message 
+    });
+  }
+});
+
+// Get students' status at a specific date
+studentRoutes.get('/status-at-date', async (req, res) => {
+  try {
+    const { date, grade, cycle } = req.query;
+    
+    if (!date) {
+      return res.status(400).json({ 
+        error: 'נדרש תאריך (date)' 
+      });
+    }
+    
+    // Validate date format (YYYY-MM-DD)
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(date)) {
+      return res.status(400).json({ 
+        error: 'פורמט תאריך לא תקין. השתמש בפורמט YYYY-MM-DD' 
+      });
+    }
+    
+    const students = await StudentModel.getStatusAtDate(
+      date + ' 23:59:59', // Include full date
+      grade || null,
+      cycle || null
+    );
+    
+    // Group by status for summary
+    const statusCounts = {};
+    students.forEach(student => {
+      const status = student.statusAtDate || student.currentStatus;
+      statusCounts[status] = (statusCounts[status] || 0) + 1;
+    });
+    
+    res.json({
+      success: true,
+      date,
+      filters: { grade: grade || null, cycle: cycle || null },
+      totalStudents: students.length,
+      statusCounts,
+      students
+    });
+  } catch (error) {
+    console.error('Error fetching status at date:', error);
+    res.status(500).json({ 
+      error: 'שגיאה בטעינת סטטוסים בתאריך',
+      details: error.message 
+    });
+  }
+});
+
 // Educational Teams routes - only for superusers
 const educationalTeamRoutes = express.Router();
 

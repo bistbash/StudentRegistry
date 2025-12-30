@@ -89,6 +89,13 @@ async function initDatabase(retries = 5, delay = 2000) {
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_student_history_created_at ON student_history(created_at DESC)
     `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_student_history_field_name ON student_history(field_name)
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_student_history_status_changes ON student_history(field_name, created_at DESC) 
+      WHERE field_name = 'סטטוס'
+    `);
 
     // Create educational_teams table for managing educational teams
     await pool.query(`
@@ -570,6 +577,105 @@ const StudentModel = {
       return result.rows;
     } catch (error) {
       console.error('Error fetching student history:', error);
+      throw error;
+    }
+  },
+
+  // Get status summary by date and grade/cycle
+  async getStatusSummary(startDate, endDate, grade = null, cycle = null) {
+    try {
+      let query = `
+        SELECT 
+          DATE(sh.created_at) as date,
+          s.grade,
+          s.cycle,
+          sh.old_value as "oldStatus",
+          sh.new_value as "newStatus",
+          COUNT(*) as count
+        FROM student_history sh
+        INNER JOIN students s ON sh.student_id = s.id
+        WHERE sh.field_name = 'סטטוס'
+          AND sh.created_at >= $1
+          AND sh.created_at < $2
+      `;
+      
+      const params = [startDate, endDate];
+      let paramIndex = 3;
+      
+      if (grade) {
+        query += ` AND s.grade = $${paramIndex}`;
+        params.push(grade);
+        paramIndex++;
+      }
+      
+      if (cycle) {
+        query += ` AND s.cycle = $${paramIndex}`;
+        params.push(cycle);
+        paramIndex++;
+      }
+      
+      query += `
+        GROUP BY DATE(sh.created_at), s.grade, s.cycle, sh.old_value, sh.new_value
+        ORDER BY DATE(sh.created_at) DESC, s.grade, s.cycle
+      `;
+      
+      const result = await pool.query(query, params);
+      return result.rows;
+    } catch (error) {
+      console.error('Error fetching status summary:', error);
+      throw error;
+    }
+  },
+
+  // Get all students' status at a specific date
+  async getStatusAtDate(targetDate, grade = null, cycle = null) {
+    try {
+      // For each student, find their status at the target date
+      // Use a single query with LEFT JOIN LATERAL for better performance
+      let statusQuery = `
+        SELECT DISTINCT ON (s.id)
+          s.id,
+          s.id_number as "idNumber",
+          s.last_name as "lastName",
+          s.first_name as "firstName",
+          s.grade,
+          s.cycle,
+          COALESCE(sh.new_value, s.status) as "statusAtDate",
+          COALESCE(sh.created_at, s.created_at) as "statusChangedAt"
+        FROM students s
+        LEFT JOIN LATERAL (
+          SELECT new_value, created_at
+          FROM student_history
+          WHERE student_id = s.id
+            AND field_name = 'סטטוס'
+            AND created_at <= $1
+          ORDER BY created_at DESC
+          LIMIT 1
+        ) sh ON true
+        WHERE s.created_at <= $1
+      `;
+      
+      const statusParams = [targetDate];
+      let statusParamIndex = 2;
+      
+      if (grade) {
+        statusQuery += ` AND s.grade = $${statusParamIndex}`;
+        statusParams.push(grade);
+        statusParamIndex++;
+      }
+      
+      if (cycle) {
+        statusQuery += ` AND s.cycle = $${statusParamIndex}`;
+        statusParams.push(cycle);
+        statusParamIndex++;
+      }
+      
+      statusQuery += ` ORDER BY s.id`;
+      
+      const result = await pool.query(statusQuery, statusParams);
+      return result.rows;
+    } catch (error) {
+      console.error('Error fetching status at date:', error);
       throw error;
     }
   }
